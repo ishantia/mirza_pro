@@ -5,7 +5,7 @@ $configDirectory = $rootDirectory.'config.php';
 $tablesDirectory = $rootDirectory.'table.php';
 if(!file_exists($configDirectory) || !file_exists($tablesDirectory)) {
     $ERROR[] = "فایل های پروژه ناقص هستند.";
-    $ERROR[] = "فایل های پروژه را مجددا دانلود و بارگذاری کنید (<a href='https://github.com/Mmd-Amir/mirza_pro/releases/'>‎🌐 Github</a>)";
+    $ERROR[] = "فایل های پروژه را مجددا دانلود و بارگذاری کنید (<a href='https://github.com/ishantia/mirza_pro/releases/'>‎🌐 Github</a>)";
 }
 if(phpversion() < 8.2){
     $ERROR[] = "نسخه PHP شما باید حداقل 8.2 باشد.";
@@ -970,7 +970,7 @@ try {
         }
         if($replacementCount === 0 || file_put_contents($configDirectory,$newConfigData) === false) {
             $ERROR[] = '✏️❌ خطا در زمان بازنویسی اطلاعات فایل اصلی ربات';
-            $ERROR[] = "فایل های پروژه را مجددا دانلود و بارگذاری کنید (<a href='https://github.com/Mmd-Amir/mirza_pro/releases/'>‎🌐 Github</a>)";
+            $ERROR[] = "فایل های پروژه را مجددا دانلود و بارگذاری کنید (<a href='https://github.com/ishantia/mirza_pro/releases/'>‎🌐 Github</a>)";
     }
         else {
             $baseAddress = rtrim($document['address'], '/');
@@ -1718,7 +1718,7 @@ function ensureTableAndColumn(mysqli $mysqli, string $table, string $column): vo
             <input type="hidden" name="current_install_field" id="current_install_field" value="<?php echo $currentInstallField; ?>">
         </form>
         <footer>
-            <p>MirzabotPro Installer , Made by ♥️ | <a href="https://github.com/Mmd-Amir/mirza_pro/releases/">Github</a> | <a href="https://t.me/+COMDGvsapck0NzE0">Telegram</a> | &copy; <?php echo date('Y'); ?></p>
+            <p>MirzabotPro Installer , Made by ♥️ | <a href="https://github.com/ishantia/mirza_pro/releases/">Github</a> | <a href="https://t.me/+COMDGvsapck0NzE0">Telegram</a> | &copy; <?php echo date('Y'); ?></p>
         </footer>
     </div>
         <script>
