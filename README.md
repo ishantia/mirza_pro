@@ -59,7 +59,7 @@ https://domin.ir/botmirzapanel/installer
 #### 1️⃣ ابتدا اخرین نسخه را از مسیر زیر فایل zip را دانلود کنید سپس فایل ZIP را در هاست خود آپلود کرده و از حالت فشرده خارج نمایید.
 
 ```
-https://github.com/Mmd-Amir/mirza_pro/releases
+https://github.com/ishantia/mirza_pro/releases
 ```
 
  #### 2️⃣مسیر زیر را در مرورگر باز کنید (به جای domin.ir و botmirzapanel، دامنه و مسیر استخراج شده‌ی خودتان را وارد کنید):
@@ -113,7 +113,7 @@ https://domin.ir/botmirzapanel/index.php
 #### 1️⃣ ابتدا اسکریپت زیر را کپی کرده و بر روی سرور اجرا کنید.
 
 ```
-bash -c "$(curl -L https://raw.githubusercontent.com/Mmd-Amir/mirza_pro/main/install.sh)"
+bash -c "$(curl -L https://raw.githubusercontent.com/ishantia/mirza_pro/main/install.sh)"
 ```
 
 #### 2️⃣ سپس گزینه‌ٔ «2» را انتخاب نمایید تا فرآیند به‌روزرسانی انجام شود.
@@ -135,7 +135,7 @@ bash -c "$(curl -L https://raw.githubusercontent.com/Mmd-Amir/mirza_pro/main/ins
 
   #### 1️⃣ ابتدا اسکریپت زیر را بر روی سرور اجرا کنید.
  ```
-  bash -c "$(curl -L https://raw.githubusercontent.com/Mmd-Amir/mirza_pro/main/install.sh)"
+  bash -c "$(curl -L https://raw.githubusercontent.com/ishantia/mirza_pro/main/install.sh)"
 ```
 
 #### 2️⃣ سپس گزینهٔ «1» را انتخاب کرده و اطلاعات مورد نیاز را مطابق درخواست وارد نمایید.
