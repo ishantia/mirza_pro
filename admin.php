@@ -5,7 +5,7 @@ $text_panel_admin_login_template = "💎 | Version Debug Bot: 3.9
 
 <blockquote>🔹 | این ربات کاملاً رایگان است و توسط توسعه‌دهنده میرزا عرضه شده و توسط Mmd | Amir دیباگ شده است.</blockquote>
 
-<blockquote><a href=\"https://github.com/Mmd-Amir/mirza_pro\" style=\"color:#1e88ff;\">گیت هاب دیباگ کننده</a></blockquote>
+<blockquote><a href=\"https://github.com/ishantia/mirza_pro\" style=\"color:#1e88ff;\">گیت هاب دیباگ کننده</a></blockquote>
 
 <blockquote>🔹 | هرگونه فروش یا دریافت وجه بابت این ربات تخلف محسوب می‌شود.</blockquote>
 

@@ -11,7 +11,7 @@
 #### 1️⃣ ابتدا اخرین نسخه را از مسیر زیر فایل zip را دانلود کنید سپس فایل ZIP را در هاست خود آپلود کرده و از حالت فشرده خارج نمایید.
 
 ```
-https://github.com/Mmd-Amir/mirza_pro/releases
+https://github.com/ishantia/mirza_pro/releases
 ```
 
  #### 2️⃣مسیر زیر را در مرورگر باز کنید (به جای domin.ir و botmirzapanel، دامنه و مسیر استخراج شده‌ی خودتان را وارد کنید):
