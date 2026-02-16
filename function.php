@@ -919,7 +919,8 @@ function generateUUID()
 }
 function tronratee(array $requiredKeys = [])
 {
-
+    // Fetch crypto rates from SwapWallet market prices endpoint.
+    // Replaces the old Sarfe + CoinGecko pipeline which may stop working.
     $normalizedKeys = [];
     foreach ($requiredKeys as $key) {
         $normalized = strtoupper(trim((string) $key));
@@ -950,134 +951,93 @@ function tronratee(array $requiredKeys = [])
         return ['ok' => true, 'result' => $result];
     }
 
-    $usdToToman = null;
+    $endpoint = 'https://swapwallet.app/api/v1/market/prices';
+    $response = @file_get_contents($endpoint, false, $context);
 
-    $usdResponse = @file_get_contents('https://sarfe.erfjab.com/api/prices', false, $context);
-    if ($usdResponse === false) {
-        error_log('Failed to fetch USD price from Sarfe API');
-    } else {
-        $usdData = json_decode($usdResponse, true);
-        if (!is_array($usdData)) {
-            error_log('Invalid response received from Sarfe API');
-        } else {
-            $usdPrice = null;
-            $usdRawValues = [];
-
-            foreach (['usd1', 'usd2'] as $usdKey) {
-                if (!array_key_exists($usdKey, $usdData)) {
-                    continue;
-                }
-
-                $rawValue = $usdData[$usdKey];
-                $usdRawValues[$usdKey] = $rawValue;
-
-                if (is_string($rawValue)) {
-
-                    $normalizedValue = preg_replace('/[^\d\.\-]/u', '', $rawValue);
-                } elseif (is_numeric($rawValue)) {
-                    $normalizedValue = (string) $rawValue;
-                } else {
-                    continue;
-                }
-
-                if (!is_numeric($normalizedValue)) {
-                    continue;
-                }
-
-                $numericValue = abs((float) $normalizedValue);
-                if ($numericValue > 0.0) {
-                    $usdPrice = $numericValue;
-                    break;
-                }
-            }
-
-            if ($usdPrice === null) {
-                $rawLog = '';
-                if (!empty($usdRawValues)) {
-                    $rawLog = ' Raw values: ' . json_encode($usdRawValues);
-                }
-                error_log('Missing USD price from Sarfe API.' . $rawLog);
-            } else {
-
-                $usdToToman = $usdPrice;
-            }
-        }
+    if ($response === false) {
+        error_log('Failed to fetch market prices from SwapWallet API');
+        if ($needsTrx) $missingKeys[] = 'TRX';
+        if ($needsTon) $missingKeys[] = 'Ton';
+        if ($needsUsd) $missingKeys[] = 'USD';
+        return ['ok' => empty($missingKeys), 'result' => $result];
     }
 
-    if ($usdToToman === null) {
-        if ($needsTrx) {
-            $missingKeys[] = 'TRX';
-        }
-        if ($needsTon) {
-            $missingKeys[] = 'Ton';
-        }
-        if ($needsUsd) {
-            $missingKeys[] = 'USD';
-        }
-
-        $ok = empty($missingKeys);
-        return ['ok' => $ok, 'result' => $result];
+    $data = json_decode($response, true);
+    if (!is_array($data) || ($data['status'] ?? null) !== 'OK' || !isset($data['result']) || !is_array($data['result'])) {
+        error_log('Invalid response received from SwapWallet API');
+        if ($needsTrx) $missingKeys[] = 'TRX';
+        if ($needsTon) $missingKeys[] = 'Ton';
+        if ($needsUsd) $missingKeys[] = 'USD';
+        return ['ok' => empty($missingKeys), 'result' => $result];
     }
 
-    $fetchCoinPrice = static function (string $id) use ($context) {
-        $endpoint = 'https://api.coingecko.com/api/v3/simple/price?ids='
-            . rawurlencode($id)
-            . '&vs_currencies=usd';
+    $prices = $data['result'];
 
-        $response = @file_get_contents($endpoint, false, $context);
-        if ($response === false) {
-            return null;
+    // Helper: fetch pair value case-insensitively (keys like "TRX/IRT").
+    $getPair = static function (array $prices, string $base, string $quote) {
+        $target = strtoupper($base . '/' . $quote);
+        foreach ($prices as $k => $v) {
+            if (strtoupper((string) $k) !== $target) {
+                continue;
+            }
+
+            if (is_string($v)) {
+                $v = preg_replace('/[^\d\.\-]/u', '', $v);
+            }
+
+            if (!is_numeric($v)) {
+                return null;
+            }
+
+            $num = (float) $v;
+            if ($num <= 0.0 || !is_finite($num)) {
+                return null;
+            }
+
+            return $num;
         }
-
-        $data = json_decode($response, true);
-        if (!is_array($data) || !isset($data[$id]['usd']) || !is_numeric($data[$id]['usd'])) {
-            return null;
-        }
-
-        $value = (float) $data[$id]['usd'];
-        if ($value <= 0.0 || !is_finite($value)) {
-            return null;
-        }
-
-        return $value; 
+        return null;
     };
 
     if ($needsTrx) {
-
-        $trxUsd = $fetchCoinPrice('tron');
-        if ($trxUsd === null) {
-            error_log('Missing or invalid TRX price from CoinGecko');
+        $trxIrt = $getPair($prices, 'TRX', 'IRT');
+        if ($trxIrt === null) {
+            error_log('Missing or invalid TRX/IRT price from SwapWallet');
             $missingKeys[] = 'TRX';
         } else {
-            $result['TRX'] = round($trxUsd * $usdToToman, 2); 
+            $result['TRX'] = round($trxIrt, 2);
         }
     }
 
     if ($needsTon) {
-        $tonUsd = $fetchCoinPrice('toncoin');
-        if ($tonUsd === null) {
-            error_log('Missing or invalid Ton price from CoinGecko');
+        $tonIrt = $getPair($prices, 'TON', 'IRT');
+        if ($tonIrt === null) {
+            // Some providers might use "Ton" instead of "TON"
+            $tonIrt = $getPair($prices, 'Ton', 'IRT');
+        }
+
+        if ($tonIrt === null) {
+            error_log('Missing or invalid TON/IRT price from SwapWallet');
             $missingKeys[] = 'Ton';
         } else {
-            $result['Ton'] = round($tonUsd * $usdToToman, 2); 
+            $result['Ton'] = round($tonIrt, 2);
         }
     }
 
     if ($needsUsd) {
-
-        $usdtUsd = $fetchCoinPrice('tether');
-        if ($usdtUsd === null) {
-            error_log('Missing or invalid USDT price from CoinGecko');
+        // The bot historically returns "USD" as USDT-to-IRT (toman/irt) rate.
+        $usdtIrt = $getPair($prices, 'USDT', 'IRT');
+        if ($usdtIrt === null) {
+            error_log('Missing or invalid USDT/IRT price from SwapWallet');
             $missingKeys[] = 'USD';
         } else {
-            $result['USD'] = round($usdtUsd * $usdToToman, 2); 
+            $result['USD'] = round($usdtIrt, 2);
         }
     }
 
-    $ok = empty($missingKeys);
-
-    return ['ok' => $ok, 'result' => $result];
+    return ['ok' => empty($missingKeys), 'result' => $result];
 }
+
 
 function requireTronRates(array $keys = [])
 {
