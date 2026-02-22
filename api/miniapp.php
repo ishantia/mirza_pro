@@ -11,107 +11,6 @@ date_default_timezone_set('Asia/Tehran');
 ini_set('default_charset', 'UTF-8');
 ini_set('error_log', 'error_log');
 $ManagePanel = new ManagePanel();
-
-function extractProductAgentFilters(array $product)
-{
-    $agentFields = [
-        'agent',
-        'agents',
-        'agent_list',
-        'agent_lists',
-        'agent_access',
-        'agent_type',
-        'allowed_agents',
-        'allowed_agent',
-        'user_type',
-        'user_types',
-        'type_user',
-        'typeuser',
-        'group_user',
-        'group_users',
-        'audience',
-        'audiences'
-    ];
-
-    foreach ($agentFields as $field) {
-        if (!isset($product[$field]) || $product[$field] === null || $product[$field] === '') {
-            continue;
-        }
-
-        $rawValue = $product[$field];
-        $values = [];
-
-        if (is_array($rawValue)) {
-            $values = $rawValue;
-        } else {
-            $rawString = trim((string)$rawValue);
-            if ($rawString === '') {
-                continue;
-            }
-
-            $decoded = json_decode($rawString, true);
-            if (json_last_error() === JSON_ERROR_NONE) {
-                if (is_array($decoded)) {
-                    $values = $decoded;
-                } elseif (is_scalar($decoded) && $decoded !== null) {
-                    $values = [(string)$decoded];
-                }
-            }
-
-            if (empty($values)) {
-                $values = preg_split('/[,|]/', $rawString);
-            }
-        }
-
-        $normalized = [];
-        foreach ((array)$values as $value) {
-            if (is_array($value)) {
-                continue;
-            }
-            $token = strtolower(trim((string)$value));
-            if ($token !== '') {
-                $normalized[] = $token;
-            }
-        }
-
-        if (!empty($normalized)) {
-            return $normalized;
-        }
-    }
-
-    return [];
-}
-
-function productIsAllowedForAgent(array $product, $agent)
-{
-    if (!is_string($agent) || $agent === '') {
-        return true;
-    }
-
-    $allowedAgents = extractProductAgentFilters($product);
-    if (empty($allowedAgents)) {
-        return true;
-    }
-
-    $agent = strtolower(trim($agent));
-    if ($agent === '') {
-        return true;
-    }
-
-    $wildcards = ['all', '*', 'any', 'everyone'];
-
-    foreach ($allowedAgents as $allowed) {
-        if (in_array($allowed, $wildcards, true)) {
-            return true;
-        }
-
-        if ($allowed === $agent) {
-            return true;
-        }
-    }
-
-    return false;
-}
 $headers = getallheaders();
 $authorizationHeader = null;
 foreach ($headers as $headerKey => $headerValue) {
@@ -341,18 +240,7 @@ switch ($data['actions']) {
             } else {
                 $lastupdate = null;
             }
-            if (($DataUserOut['online_at'] ?? null) == "online") {
-                $lastonline = 'آنلاین';
-            } elseif (($DataUserOut['online_at'] ?? null) == "offline") {
-                $lastonline = 'آفلاین';
-            } else {
-                if (isset($DataUserOut['online_at']) && $DataUserOut['online_at'] !== null) {
-                    $dateString = $DataUserOut['online_at'];
-                    $lastonline = jdate('Y/m/d H:i:s', strtotime($dateString));
-                } else {
-                    $lastonline = "متصل نشده";
-                }
-            }
+            $lastonline = formatOnlineAtLabel($DataUserOut['online_at'] ?? null, $DataUserOut['is_online'] ?? null);
             $expireTimestamp = isset($DataUserOut['expire']) && is_numeric($DataUserOut['expire']) ? (int)$DataUserOut['expire'] : 0;
             $expirationDate = $expireTimestamp ? jdate('Y/m/d', $expireTimestamp) : 'نامحدود';
             $usernameOutput = $DataUserOut['username'] ?? $invoice['username'];
@@ -743,9 +631,6 @@ switch ($data['actions']) {
             $stmt->execute();
             $product_list = [];
             while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                if (!productIsAllowedForAgent($result, $user_info['agent'])) {
-                    continue;
-                }
                 $hide_panel = json_decode($result['hide_panel'], true);
                 if (!is_array($hide_panel)) {
                     $hide_panel = [];
@@ -918,14 +803,6 @@ switch ($data['actions']) {
             echo json_encode(array(
                 'status' => false,
                 'msg' => "محصول انتخابی پیدا نشد"
-            ));
-            return;
-        }
-        if (!productIsAllowedForAgent((array)$product, $user_info['agent'])) {
-            http_response_code(403);
-            echo json_encode(array(
-                'status' => false,
-                'msg' => "این محصول برای نوع کاربری شما فعال نیست"
             ));
             return;
         }

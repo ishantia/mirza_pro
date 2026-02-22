@@ -166,17 +166,20 @@ $KeyboardBalance = json_encode([
     ]
 ]);
 
-function KeyboardProduct($location, $query, $pricediscount, $datakeyboard, $statuscustom = false, $backuser = "backuser", $valuetow = null, $customvolume = "customsellvolume")
+function KeyboardProduct($location, $query, $pricediscount, $datakeyboard, $statuscustom = false, $backuser = "backuser", $valuetow = null, $customvolume = "customsellvolume", $agentFilter = null, $params = [])
 {
     global $pdo, $textbotlang;
     $product = ['inline_keyboard' => []];
     $statusshowprice = select("shopSetting", "*", "Namevalue", "statusshowprice", "select")['value'];
     $stmt = $pdo->prepare($query);
-    $stmt->execute();
+    $stmt->execute($params);
     $valuetow = $valuetow != null ? "-$valuetow" : "";
     while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $productlist = json_decode(file_get_contents('product.json'), true);
-        $productlist_name = json_decode(file_get_contents('product_name.json'), true);
+        if ($agentFilter !== null && ($result['agent'] ?? null) !== $agentFilter) {
+            continue;
+        }
+        $productlist = readJsonFileIfExists('product.json');
+        $productlist_name = readJsonFileIfExists('product_name.json');
         if (isset($productlist[$result['code_product']])) $result['price_product'] = $productlist[$result['code_product']];
         $result['name_product'] = empty($productlist_name[$result['code_product']]) ? $result['name_product'] : $productlist_name[$result['code_product']];
         $hide_panel = json_decode($result['hide_panel'], true);
@@ -209,12 +212,7 @@ function KeyboardCategory($location, $agent, $backuser = "backuser")
     $stmt->execute();
     $list_category = ['inline_keyboard' => [],];
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $stmts = $pdo->prepare(
-            "SELECT * FROM product 
-             WHERE (Location = :location OR Location = '/all') 
-             AND category = :category
-             AND (agent = :agent OR agent = 'all')"
-        );
+        $stmts = $pdo->prepare("SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND category = :category AND agent = :agent");
         $stmts->bindParam(':location', $location, PDO::PARAM_STR);
         $stmts->bindParam(':category', $row['remark'], PDO::PARAM_STR);
         $stmts->bindParam(':agent', $agent, PDO::PARAM_STR);
@@ -227,4 +225,3 @@ function KeyboardCategory($location, $agent, $backuser = "backuser")
     ];
     return json_encode($list_category);
 }
-

@@ -1031,6 +1031,27 @@ $optionMarzban = json_encode([
     ],
     'resize_keyboard' => true
 ]);
+$optionGuard = json_encode([
+    'keyboard' => [
+        [['text' => "⚙️ وضعیت قابلیت ها پنل"]],
+        [['text' => "✍️ نام پنل"], ['text' => "❌ حذف پنل"]],
+        [['text' => "🔐 ویرایش کلید"], ['text' => "⁉️ وضعیت اتصال به پنل"]],
+        [['text' => "⚙️ تنظیم سرویس ها"], ['text' => "🎛️ تنظیمات سرویس"]],
+        [['text' => "🔋 روش تمدید سرویس"], ['text' => "💡 روش ساخت نام کاربری"]],
+        [['text' => "🚨 محدودیت ساخت اکانت"], ['text' => "📍 تغییر گروه کاربری"]],
+        [['text' => "⏳ زمان سرویس تست"], ['text' => "💾 حجم اکانت تست"]],
+        [['text' => "⚙️ قیمت حجم سرویس دلخواه"], ['text' => "➕ قیمت حجم اضافه"]],
+        [['text' => "⏳ قیمت زمان اضافه"], ['text' => "⏳ قیمت زمان دلخواه"]],
+        [['text' => "🌍 قیمت تغییر لوکیشن"]],
+        [['text' => "📍 حداقل حجم دلخواه"], ['text' => "📍 حداکثر حجم دلخواه"]],
+        [['text' => "📍 حداقل زمان دلخواه"], ['text' => "📍 حداکثر زمان دلخواه"]],
+        [['text' => "⚙️  اینباند اکانت غیرفعال"]],
+        [['text' => "🫣 مخفی کردن پنل برای یک کاربر"]],
+        [['text' => "❌  حذف کاربر از لیست مخفی شدگان"]],
+        [['text' => $textbotlang['Admin']['backadmin']], ['text' => $textbotlang['Admin']['backmenu']]]
+    ],
+    'resize_keyboard' => true
+]);
 $optionibsng = json_encode([
     'keyboard' => [
         [['text' => "⚙️ وضعیت قابلیت ها پنل"]],
@@ -1309,6 +1330,13 @@ $keyboardtypepanel = json_encode([
             ['text' => "میکروتیک", 'callback_data' => 'typepanel#mikrotik']
         ],
         [
+            ['text' => "Guard (GuardCore)", 'callback_data' => 'typepanel#guard']
+        ],
+        [
+            ['text' => "پنل ربکا", 'callback_data' => 'typepanel#rebeca'],
+            ['text' => "پنل پاسارگارد", 'callback_data' => 'typepanel#pasargad']
+        ],
+        [
             ['text' => $textbotlang['Admin']['backadmin'] , 'callback_data' => 'admin']
         ]
     ],
@@ -1483,18 +1511,21 @@ $keyboardlinkapp = json_encode([
     ],
     'resize_keyboard' => true
 ]);
-function KeyboardProduct($location,$query,$pricediscount,$datakeyboard,$statuscustom = false,$backuser = "backuser", $valuetow = null,$customvolume = "customsellvolume"){
+function KeyboardProduct($location,$query,$pricediscount,$datakeyboard,$statuscustom = false,$backuser = "backuser", $valuetow = null,$customvolume = "customsellvolume", $agentFilter = null, $params = []){
     global $pdo,$textbotlang,$from_id;
     $product = ['inline_keyboard' => []];
     $statusshowprice = select("shopSetting","*","Namevalue","statusshowprice","select")['value'];
     $stmt = $pdo->prepare($query);
-    $stmt->execute();
+    $stmt->execute($params);
     if($valuetow != null){
             $valuetow = "-$valuetow";
     }else{
             $valuetow = "";
         }
     while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        if ($agentFilter !== null && ($result['agent'] ?? null) !== $agentFilter) {
+            continue;
+        }
         $hide_panel = json_decode($result['hide_panel'], true);
         if (!is_array($hide_panel)) {
             if ($hide_panel === null && json_last_error() !== JSON_ERROR_NONE) {
@@ -1529,9 +1560,10 @@ function KeyboardCategory($location,$agent,$backuser = "backuser"){
     $stmt->execute();
     $list_category = ['inline_keyboard' => [],];
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $stmts = $pdo->prepare("SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND category = :category");
+        $stmts = $pdo->prepare("SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND category = :category AND agent = :agent");
         $stmts->bindParam(':location', $location, PDO::PARAM_STR);
         $stmts->bindParam(':category', $row['remark'], PDO::PARAM_STR);
+        $stmts->bindParam(':agent', $agent, PDO::PARAM_STR);
         $stmts->execute();
         if($stmts->rowCount() == 0)continue;
         $list_category['inline_keyboard'][] = [['text' =>$row['remark'],'callback_data' => "categorynames_".$row['id']]];
@@ -1544,8 +1576,11 @@ function KeyboardCategory($location,$agent,$backuser = "backuser"){
 
 function keyboardTimeCategory($name_panel,$agent,$callback_data = "producttime_",$callback_data_back = "backuser",$statuscustomvolume = false,$statusbtnextend = false){
     global $pdo,$textbotlang;
-    $stmt = $pdo->prepare("SELECT Service_time FROM product WHERE (Location = '$name_panel' OR Location = '/all')");
-    $stmt->execute();
+    $stmt = $pdo->prepare("SELECT Service_time FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+    $stmt->execute([
+        ':location' => $name_panel,
+        ':agent' => $agent
+    ]);
     $montheproduct = array_flip(array_flip($stmt->fetchAll(PDO::FETCH_COLUMN)));
     $monthkeyboard = ['inline_keyboard' => []];
     if (in_array("1",$montheproduct)){

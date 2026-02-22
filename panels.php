@@ -3,6 +3,7 @@ ini_set('error_log', 'error_log');
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/Marzban.php';
 require_once __DIR__ . '/function.php';
+require_once __DIR__ . '/guard.php';
 require_once __DIR__ . '/x-ui_single.php';
 require_once __DIR__ . '/hiddify.php';
 require_once __DIR__ . '/alireza.php';
@@ -278,6 +279,83 @@ class ManagePanel
                     $Output['subscription_url'] = "https://$domainhosts/sub/" . $inoice['id_invoice'];
                 }
             }
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            $serviceIdsSource = $Get_Data_Panel['guard_service_ids'] ?? null;
+            if (!empty($Get_Data_Product['inbounds'])) {
+                $decodedServices = json_decode($Get_Data_Product['inbounds'], true);
+                if (is_array($decodedServices)) {
+                    $serviceIdsSource = $decodedServices;
+                }
+            }
+            $guardNote = isset($Get_Data_Panel['guard_note']) ? trim((string) $Get_Data_Panel['guard_note']) : '';
+            $guardAutoDeleteDays = isset($Get_Data_Panel['guard_auto_delete_days']) ? max(0, intval($Get_Data_Panel['guard_auto_delete_days'])) : 0;
+            $guardAutoRenewalsConfig = guardDecodeAutoRenewalsConfig($Get_Data_Panel['guard_auto_renewals'] ?? []);
+            $guardAutoRenewalsPayload = guardBuildAutoRenewalsPayload($guardAutoRenewalsConfig);
+            $payloadNote = $guardNote !== '' ? $guardNote : $note;
+            $serviceResult = guardResolveServiceIds($Get_Data_Panel['name_panel'], $serviceIdsSource);
+            if ($serviceResult['status'] === false) {
+                return array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $serviceResult['msg']
+                );
+            }
+            $limitExpire = guardNormalizeExpire($expire);
+            $payload = array(
+                array(
+                    "username" => $usernameC,
+                    "limit_usage" => $data_limit,
+                    "limit_expire" => $limitExpire,
+                    "service_ids" => $serviceResult['service_ids'],
+                    "note" => $payloadNote,
+                    "telegram_id" => "",
+                    "discord_webhook_url" => "",
+                    "auto_delete_days" => $guardAutoDeleteDays,
+                    "auto_renewals" => $guardAutoRenewalsPayload
+                )
+            );
+            $createResponse = guardCreateSubscription($Get_Data_Panel['name_panel'], $payload);
+            if ($createResponse['status'] === false) {
+                return array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $createResponse['msg']
+                );
+            }
+            $subscriptionUrl = '';
+            $configs = array();
+            $createdData = $createResponse['data'];
+            if (is_array($createdData) && isset($createdData[0])) {
+                $first = $createdData[0];
+                if (isset($first['subscription_url'])) {
+                    $subscriptionUrl = $first['subscription_url'];
+                } elseif (isset($first['subscription'])) {
+                    $subscriptionUrl = $first['subscription'];
+                }
+            } elseif (is_array($createdData)) {
+                if (isset($createdData['subscription_url'])) {
+                    $subscriptionUrl = $createdData['subscription_url'];
+                } elseif (isset($createdData['subscription'])) {
+                    $subscriptionUrl = $createdData['subscription'];
+                }
+            }
+            if (!empty($subscriptionUrl)) {
+                $configs[] = $subscriptionUrl;
+            }
+            $userData = $this->DataUser($Get_Data_Panel['name_panel'], $usernameC);
+            if (!empty($userData) && (!isset($userData['status']) || $userData['status'] != "Unsuccessful")) {
+                if (!empty($userData['subscription_url'])) {
+                    $subscriptionUrl = $userData['subscription_url'];
+                }
+                if (!empty($userData['links'])) {
+                    $configs = $userData['links'];
+                }
+            }
+            if ($inoice != false) {
+                $subscriptionUrl = "https://$domainhosts/sub/" . $inoice['id_invoice'];
+            }
+            $Output['status'] = 'successful';
+            $Output['username'] = $usernameC;
+            $Output['subscription_url'] = $subscriptionUrl;
+            $Output['configs'] = $configs;
         } elseif ($Get_Data_Panel['type'] == "Manualsale") {
             $statement = $pdo->prepare("SELECT * FROM manualsell WHERE codepanel = :code_panel AND status = 'active' AND codeproduct = '$code_product' ORDER BY RAND() LIMIT 1");
             $statement->execute(array(':code_panel' => $Get_Data_Panel['code_panel']));
@@ -592,6 +670,101 @@ class ManagePanel
                     );
                 }
             }
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            $subscription = guardGetSubscription($Get_Data_Panel['name_panel'], $username);
+            if ($subscription['status'] === false) {
+                return array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $subscription['msg']
+                );
+            }
+            $subscriptionData = $subscription['data'];
+            if (isset($subscriptionData['data']) && is_array($subscriptionData['data'])) {
+                $subscriptionData = $subscriptionData['data'];
+            }
+            if (isset($subscriptionData['subscription']) && is_array($subscriptionData['subscription'])) {
+                $subscriptionData = $subscriptionData['subscription'];
+            }
+            if (is_array($subscriptionData) && isset($subscriptionData[0])) {
+                $subscriptionData = $subscriptionData[0];
+            }
+            if (!is_array($subscriptionData)) {
+                return array(
+                    'status' => 'Unsuccessful',
+                    'msg' => 'User not found'
+                );
+            }
+            $statusGuard = isset($subscriptionData['status']) ? $subscriptionData['status'] : 'active';
+            if (isset($subscriptionData['enabled']) && $subscriptionData['enabled'] === false) {
+                $statusGuard = "disabled";
+            }
+            if ($statusGuard === true) {
+                $statusGuard = "active";
+            } elseif ($statusGuard === false) {
+                $statusGuard = "disabled";
+            }
+            $limitExpire = isset($subscriptionData['limit_expire']) ? intval($subscriptionData['limit_expire']) : 0;
+            $dataLimit = isset($subscriptionData['limit_usage']) ? intval($subscriptionData['limit_usage']) : 0;
+            $subscriptionUrl = $subscriptionData['subscription_url'] ?? ($subscriptionData['subscription'] ?? '');
+            $serviceIds = isset($subscriptionData['service_ids']) && is_array($subscriptionData['service_ids']) ? $subscriptionData['service_ids'] : array();
+            $usage = 0;
+            if (isset($subscriptionData['total_usage'])) {
+                $usage = intval($subscriptionData['total_usage']);
+            } elseif (isset($subscriptionData['usage'])) {
+                $usage = intval($subscriptionData['usage']);
+            } elseif (isset($subscriptionData['used_traffic'])) {
+                $usage = intval($subscriptionData['used_traffic']);
+            }
+            $usageResponse = guardGetSubscriptionUsages($Get_Data_Panel['name_panel'], $username);
+            if ($usageResponse && $usageResponse['status'] !== false && isset($usageResponse['data'])) {
+                $usageData = $usageResponse['data'];
+                if (isset($usageData['total_usage'])) {
+                    $usage = intval($usageData['total_usage']);
+                } else {
+                    $usageList = array();
+                    if (isset($usageData['usages']) && is_array($usageData['usages'])) {
+                        $usageList = $usageData['usages'];
+                    } elseif (is_array($usageData) && isset($usageData[0])) {
+                        $usageList = $usageData;
+                    }
+                    foreach ($usageList as $usageItem) {
+                        $usage += intval($usageItem['total_usage'] ?? $usageItem['usage'] ?? (($usageItem['download'] ?? 0) + ($usageItem['upload'] ?? 0)));
+                    }
+                }
+            }
+            $onlineAt = $subscriptionData['online_at'] ?? ($subscriptionData['last_online_at'] ?? null);
+            $isOnline = null;
+            if (array_key_exists('is_online', $subscriptionData)) {
+                $isOnline = $subscriptionData['is_online'];
+            } elseif (array_key_exists('online', $subscriptionData)) {
+                $isOnline = $subscriptionData['online'];
+            }
+            if ($isOnline !== null) {
+                $isOnline = filter_var($isOnline, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+            }
+            $links = array();
+            if (!empty($subscriptionUrl)) {
+                $links[] = $subscriptionUrl;
+            }
+            if ($inoice != false) {
+                $subscriptionUrl = "https://$domainhosts/sub/" . $inoice['id_invoice'];
+            }
+            $Output = array(
+                'status' => $statusGuard,
+                'username' => $subscriptionData['username'] ?? $username,
+                'data_limit' => $dataLimit,
+                'expire' => $limitExpire,
+                'online_at' => $onlineAt,
+                'is_online' => $isOnline,
+                'used_traffic' => $usage,
+                'links' => $links,
+                'subscription_url' => $subscriptionUrl,
+                'sub_updated_at' => null,
+                'sub_last_user_agent' => null,
+                'uuid' => null,
+                'data_limit_reset' => null,
+                'service_ids' => $serviceIds
+            );
         } elseif ($Get_Data_Panel['type'] == "x-ui_single") {
             $user_data = get_clinets($username, $Get_Data_Panel['name_panel']);
             if (!empty($user_data['error'])) {
@@ -1039,6 +1212,21 @@ class ManagePanel
                     'subscription_url' => $Data_User['subscription_url']
                 );
             }
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            $revoke_sub = guardRevokeSubscriptions($name_panel, array($username));
+            if ($revoke_sub['status'] === false) {
+                $Output = array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $revoke_sub['msg']
+                );
+            } else {
+                $Data_User = $ManagePanel->DataUser($name_panel, $username);
+                $Output = array(
+                    'status' => 'successful',
+                    'configs' => $Data_User['links'] ?? array(),
+                    'subscription_url' => $Data_User['subscription_url'] ?? null
+                );
+            }
         } elseif ($Get_Data_Panel['type'] == "x-ui_single") {
             $subId = bin2hex(random_bytes(8));
             $config = array(
@@ -1318,6 +1506,19 @@ class ManagePanel
                     'username' => $username,
                 );
             }
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            $UsernameData = guardDeleteSubscriptions($Get_Data_Panel['name_panel'], array($username));
+            if ($UsernameData['status'] === false) {
+                $Output = array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $UsernameData['msg']
+                );
+            } else {
+                $Output = array(
+                    'status' => 'successful',
+                    'username' => $username,
+                );
+            }
         } elseif ($Get_Data_Panel['type'] == "ibsng") {
             $UsernameData = deleteUserIBSng($Get_Data_Panel['name_panel'], $username);
             if (!$UsernameData['status']) {
@@ -1358,11 +1559,21 @@ class ManagePanel
         global $new_marzban;
         $Output = array();
         $Get_Data_Panel = select("marzban_panel", "*", "name_panel", $name_panel, "select");
+        if (!$Get_Data_Panel || !is_array($Get_Data_Panel) || empty($Get_Data_Panel['type'])) {
+            return array(
+                'status' => false,
+                'msg' => 'Panel Not Found'
+            );
+        }
         if ($Get_Data_Panel['type'] == "marzban") {
             if ($new_marzban) {
                 $result = getuser($username, $name_panel);
-                $result = json_decode($result['body'], true);
-                $config['proxy_settings'] = $result['proxy_settings'];
+                if (!empty($result['body'])) {
+                    $result = json_decode($result['body'], true);
+                    if (is_array($result) && isset($result['proxy_settings'])) {
+                        $config['proxy_settings'] = $result['proxy_settings'];
+                    }
+                }
             }
             $modify = Modifyuser($name_panel, $username, $config);
             if (!empty($modify['error'])) {
@@ -1618,6 +1829,21 @@ class ManagePanel
                 'status' => true,
                 'data' => $modify
             );
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            if (isset($config['limit_expire'])) {
+                $config['limit_expire'] = guardNormalizeExpire($config['limit_expire']);
+            }
+            $modify = guardUpdateSubscription($Get_Data_Panel['name_panel'], $username, $config);
+            if ($modify['status'] === false) {
+                return array(
+                    'status' => false,
+                    'msg' => $modify['msg']
+                );
+            }
+            return array(
+                'status' => true,
+                'data' => $modify
+            );
         }
     }
     function Change_status($username, $name_panel)
@@ -1632,7 +1858,7 @@ class ManagePanel
             );
             return;
         }
-        if (!in_array($DataUserOut['status'], ["active", "disabled"])) {
+        if (!in_array($DataUserOut['status'], ["active", "disabled", "expired", "limited", "on_hold"])) {
             $Output = array(
                 'status' => 'Unsuccessful',
                 'msg' => "status invalid"
@@ -1714,6 +1940,19 @@ class ManagePanel
             }
             $configs = array("enable" => $status);
             $ManagePanel->Modifyuser($username, $name_panel, $configs);
+            $Output = array(
+                'status' => 'successful',
+                'msg' => null
+            );
+        } elseif ($Get_Data_Panel['type'] == "guard") {
+            $action = $DataUserOut['status'] == "active" ? "disable" : "enable";
+            $toggle = guardToggleSubscriptions($Get_Data_Panel['name_panel'], array($username), $action);
+            if ($toggle['status'] === false) {
+                return array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $toggle['msg'] ?? 'Toggle failed'
+                );
+            }
             $Output = array(
                 'status' => 'successful',
                 'msg' => null
@@ -1871,6 +2110,17 @@ class ManagePanel
             );
         } elseif ($panel['type'] == "s_ui") {
             ResetUserDataUsages_ui($username, $name_panel);
+            return array(
+                'status' => true
+            );
+        } elseif ($panel['type'] == "guard") {
+            $reset = guardResetSubscriptions($panel['name_panel'], array($username));
+            if ($reset['status'] === false) {
+                return array(
+                    'status' => false,
+                    'msg' => $reset['msg']
+                );
+            }
             return array(
                 'status' => true
             );
@@ -2099,6 +2349,21 @@ class ManagePanel
                 "volume" => $data_limit_new,
                 "expiry" => $time_new
             );
+        } elseif ($panel['type'] == "guard") {
+            $limitExpire = guardNormalizeExpire($time_new);
+            $serviceIdsSource = isset($data_user['service_ids']) ? $data_user['service_ids'] : ($panel['guard_service_ids'] ?? null);
+            $serviceResult = guardResolveServiceIds($panel['name_panel'], $serviceIdsSource);
+            if ($serviceResult['status'] === false) {
+                return array(
+                    'status' => false,
+                    'msg' => $serviceResult['msg']
+                );
+            }
+            $data = array(
+                "limit_usage" => $data_limit_new,
+                "limit_expire" => $limitExpire,
+                "service_ids" => $serviceResult['service_ids']
+            );
         }
         $extend = $this->Modifyuser($username, $panel['name_panel'], $data);
         if ($extend['status'] == false) {
@@ -2242,6 +2507,19 @@ class ManagePanel
             $data = array(
                 "volume" => $new_limit,
             );
+        } elseif ($panel['type'] == "guard") {
+            $serviceIdsSource = isset($user_info['service_ids']) ? $user_info['service_ids'] : ($panel['guard_service_ids'] ?? null);
+            $serviceResult = guardResolveServiceIds($panel['name_panel'], $serviceIdsSource);
+            if ($serviceResult['status'] === false) {
+                return array(
+                    'status' => false,
+                    'msg' => $serviceResult['msg']
+                );
+            }
+            $data = array(
+                "limit_usage" => $new_limit,
+                "service_ids" => $serviceResult['service_ids']
+            );
         }
         $extra_volume = $this->Modifyuser($username_account, $panel['name_panel'], $data);
         if ($extra_volume['status'] == false) {
@@ -2379,6 +2657,19 @@ class ManagePanel
             return array(
                 'status' => true,
                 'data' => $log
+            );
+        } elseif ($panel['type'] == "guard") {
+            $serviceIdsSource = isset($user_info['service_ids']) ? $user_info['service_ids'] : ($panel['guard_service_ids'] ?? null);
+            $serviceResult = guardResolveServiceIds($panel['name_panel'], $serviceIdsSource);
+            if ($serviceResult['status'] === false) {
+                return array(
+                    'status' => false,
+                    'msg' => $serviceResult['msg']
+                );
+            }
+            $data = array(
+                "limit_expire" => guardNormalizeExpire($new_limit),
+                "service_ids" => $serviceResult['service_ids']
             );
         } elseif ($panel['type'] == "s_ui") {
             $data = array(

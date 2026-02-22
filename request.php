@@ -73,17 +73,22 @@ class CurlRequest {
         }
 
         $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if (curl_errno($ch)) {
             $error = curl_error($ch);
+            error_log(sprintf('CurlRequest error calling %s: %s (HTTP code: %s)', $this->url, $error, var_export($httpCode, true)));
             curl_close($ch);
             return [
-                'status' => null,
-                'body' => null,
+                'status' => $httpCode,
+                'body' => $response,
                 'error' => $error,
             ];
         }
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        if ($httpCode === 0 || $httpCode >= 400) {
+            error_log(sprintf('CurlRequest call to %s returned HTTP code %s', $this->url, var_export($httpCode, true)));
+        }
 
         return [
             'status' => $httpCode,

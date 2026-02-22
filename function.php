@@ -4,6 +4,10 @@ if (!defined('APP_ROOT_PATH')) {
     define('APP_ROOT_PATH', __DIR__);
 }
 
+// Attempt to load the Composer autoloader when it is available. Some shared
+// hosting environments (such as cPanel) may not expose the vendor directory or
+// Composer installation, so we avoid a hard failure when the autoloader cannot
+// be located.
 $composerAutoload = APP_ROOT_PATH . '/vendor/autoload.php';
 if (is_readable($composerAutoload)) {
     require_once $composerAutoload;
@@ -125,7 +129,15 @@ function isShellExecAvailable()
 }
 
 if (!function_exists('safe_divide')) {
-
+    /**
+     * Safely divide two numeric values and return a fallback when division is not possible.
+     *
+     * @param mixed $numerator   The value to divide.
+     * @param mixed $denominator The value to divide by.
+     * @param mixed $fallback    The value returned when division cannot be performed.
+     *
+     * @return float|int
+     */
     function safe_divide($numerator, $denominator, $fallback = 0)
     {
         if (!is_numeric($numerator) || !is_numeric($denominator)) {
@@ -147,6 +159,13 @@ if (!function_exists('safe_divide')) {
     }
 }
 
+/**
+ * Generate a referral code using the most secure random source that is available.
+ *
+ * @param int $length Desired length of the referral code.
+ *
+ * @return string
+ */
 function generateReferralCode($length = 12)
 {
     $length = max(1, (int) $length);
@@ -188,6 +207,15 @@ function generateReferralCode($length = 12)
     return $code;
 }
 
+/**
+ * Ensure that the specified user has a referral code stored in the database.
+ *
+ * @param mixed       $userId      User identifier.
+ * @param string|null $currentCode Existing referral code.
+ * @param int         $length      Length of the generated code when required.
+ *
+ * @return string|null The existing or newly generated code. Null is returned when the user id is invalid.
+ */
 function ensureUserInvitationCode($userId, $currentCode = null, $length = 12)
 {
     if (!is_scalar($userId) || (string) $userId === '') {
@@ -206,7 +234,15 @@ function ensureUserInvitationCode($userId, $currentCode = null, $length = 12)
 }
 
 if (!function_exists('applyConnectionPlaceholders')) {
-
+    /**
+     * Populate legacy and modern connection placeholders within notification templates.
+     *
+     * @param string $template         The message template to update.
+     * @param string $subscriptionLink Subscription link (sublink).
+     * @param string $configList       List of configuration links.
+     *
+     * @return string Updated template.
+     */
     function applyConnectionPlaceholders($template, $subscriptionLink, $configList)
     {
         $trimmedSubscription = trim((string) $subscriptionLink);
@@ -849,6 +885,51 @@ function getPaySettingValue($name, $default = null)
     return $result['ValuePay'];
 }
 
+/**
+ * Check whether a user exists without loading the full user table.
+ *
+ * @param mixed $userId Raw user identifier to validate.
+ *
+ * @return bool True when the user row exists; false otherwise.
+ */
+function userExists($userId)
+{
+    static $existenceCache = [];
+
+    if (is_array($userId) || is_object($userId)) {
+        return false;
+    }
+
+    $normalizedId = trim((string) $userId);
+    if ($normalizedId === '' || !ctype_digit($normalizedId)) {
+        return false;
+    }
+
+    if (array_key_exists($normalizedId, $existenceCache)) {
+        return $existenceCache[$normalizedId];
+    }
+
+    $pdo = getDatabaseConnection();
+    if (!($pdo instanceof PDO)) {
+        error_log('userExists: Database connection is unavailable.');
+        return false;
+    }
+
+    try {
+        $stmt = $pdo->prepare('SELECT 1 FROM user WHERE id = :user_id LIMIT 1');
+        $stmt->bindParam(':user_id', $normalizedId, PDO::PARAM_STR);
+        $stmt->execute();
+        $exists = $stmt->fetchColumn() !== false;
+    } catch (PDOException $exception) {
+        error_log('userExists: ' . $exception->getMessage());
+        $exists = false;
+    }
+
+    $existenceCache[$normalizedId] = $exists;
+
+    return $exists;
+}
+
 function formatPaymentReportNote($rawNote)
 {
     if ($rawNote === null) {
@@ -919,8 +1000,6 @@ function generateUUID()
 }
 function tronratee(array $requiredKeys = [])
 {
-    // Fetch crypto rates from SwapWallet market prices endpoint.
-    // Replaces the old Sarfe + CoinGecko pipeline which may stop working.
     $normalizedKeys = [];
     foreach ($requiredKeys as $key) {
         $normalized = strtoupper(trim((string) $key));
@@ -937,6 +1016,7 @@ function tronratee(array $requiredKeys = [])
     $needsTrx = isset($normalizedKeys['TRX']);
     $needsTon = isset($normalizedKeys['TON']);
     $needsUsd = isset($normalizedKeys['USD']);
+    $shouldFetchTronApi = $needsTrx || $needsTon;
 
     $context = stream_context_create([
         'http' => [
@@ -947,97 +1027,239 @@ function tronratee(array $requiredKeys = [])
     $result = [];
     $missingKeys = [];
 
-    if (!$needsTrx && !$needsTon && !$needsUsd) {
-        return ['ok' => true, 'result' => $result];
-    }
+    if ($shouldFetchTronApi) {
+        $tronApiResponse = @file_get_contents('https://xxxxx.com', false, $context);
 
-    $endpoint = 'https://swapwallet.app/api/v1/market/prices';
-    $response = @file_get_contents($endpoint, false, $context);
-
-    if ($response === false) {
-        error_log('Failed to fetch market prices from SwapWallet API');
-        if ($needsTrx) $missingKeys[] = 'TRX';
-        if ($needsTon) $missingKeys[] = 'Ton';
-        if ($needsUsd) $missingKeys[] = 'USD';
-        return ['ok' => empty($missingKeys), 'result' => $result];
-    }
-
-    $data = json_decode($response, true);
-    if (!is_array($data) || ($data['status'] ?? null) !== 'OK' || !isset($data['result']) || !is_array($data['result'])) {
-        error_log('Invalid response received from SwapWallet API');
-        if ($needsTrx) $missingKeys[] = 'TRX';
-        if ($needsTon) $missingKeys[] = 'Ton';
-        if ($needsUsd) $missingKeys[] = 'USD';
-        return ['ok' => empty($missingKeys), 'result' => $result];
-    }
-
-    $prices = $data['result'];
-
-    // Helper: fetch pair value case-insensitively (keys like "TRX/IRT").
-    $getPair = static function (array $prices, string $base, string $quote) {
-        $target = strtoupper($base . '/' . $quote);
-        foreach ($prices as $k => $v) {
-            if (strtoupper((string) $k) !== $target) {
-                continue;
+        if ($tronApiResponse === false) {
+            error_log('Failed to fetch currency rates from Tron rate API');
+            if ($needsTrx) {
+                $missingKeys[] = 'TRX';
             }
-
-            if (is_string($v)) {
-                $v = preg_replace('/[^\d\.\-]/u', '', $v);
+            if ($needsTon) {
+                $missingKeys[] = 'Ton';
             }
-
-            if (!is_numeric($v)) {
-                return null;
-            }
-
-            $num = (float) $v;
-            if ($num <= 0.0 || !is_finite($num)) {
-                return null;
-            }
-
-            return $num;
-        }
-        return null;
-    };
-
-    if ($needsTrx) {
-        $trxIrt = $getPair($prices, 'TRX', 'IRT');
-        if ($trxIrt === null) {
-            error_log('Missing or invalid TRX/IRT price from SwapWallet');
-            $missingKeys[] = 'TRX';
         } else {
-            $result['TRX'] = round($trxIrt, 2);
-        }
-    }
+            $tronData = json_decode($tronApiResponse, true);
+            if (!is_array($tronData)) {
+                error_log('Invalid response received from Tron rate API');
+                if ($needsTrx) {
+                    $missingKeys[] = 'TRX';
+                }
+                if ($needsTon) {
+                    $missingKeys[] = 'Ton';
+                }
+            } else {
+                foreach (['data', 'result'] as $wrapperKey) {
+                    if (isset($tronData[$wrapperKey]) && is_array($tronData[$wrapperKey])) {
+                        $tronData = $tronData[$wrapperKey];
+                    }
+                }
 
-    if ($needsTon) {
-        $tonIrt = $getPair($prices, 'TON', 'IRT');
-        if ($tonIrt === null) {
-            // Some providers might use "Ton" instead of "TON"
-            $tonIrt = $getPair($prices, 'Ton', 'IRT');
-        }
+                $normalizeNumeric = static function ($value) {
+                    if (is_numeric($value)) {
+                        $numeric = (float) $value;
+                    } elseif (is_string($value)) {
+                        $filtered = preg_replace('/[^\d\.\-]/u', '', $value);
+                        if ($filtered === '' || !is_numeric($filtered)) {
+                            return null;
+                        }
+                        $numeric = (float) $filtered;
+                    } else {
+                        return null;
+                    }
 
-        if ($tonIrt === null) {
-            error_log('Missing or invalid TON/IRT price from SwapWallet');
-            $missingKeys[] = 'Ton';
-        } else {
-            $result['Ton'] = round($tonIrt, 2);
+                    if (!is_finite($numeric)) {
+                        return null;
+                    }
+
+                    return $numeric;
+                };
+
+                $findNumericValueByKeys = static function (array $source, array $targetKeys) use ($normalizeNumeric) {
+                    $queue = [$source];
+
+                    $normalizedTargets = array_map(static function ($key) {
+                        return strtolower((string) $key);
+                    }, $targetKeys);
+
+                    while (!empty($queue)) {
+                        $current = array_shift($queue);
+                        foreach ($current as $currentKey => $value) {
+                            if (is_array($value)) {
+                                $queue[] = $value;
+                            }
+
+                            $keyString = strtolower((string) $currentKey);
+                            foreach ($normalizedTargets as $target) {
+                                if ($keyString === $target || str_contains($keyString, $target)) {
+                                    $candidate = $normalizeNumeric($value);
+                                    if ($candidate !== null && $candidate > 0.0) {
+                                        return $candidate;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    return null;
+                };
+
+                $extractRate = static function (?array $assetData, string $symbol) use ($findNumericValueByKeys) {
+                    if (!is_array($assetData) || empty($assetData)) {
+                        error_log('Missing or invalid rate for ' . $symbol . ' from Tron rate API');
+                        return null;
+                    }
+
+                    $rialValue = $findNumericValueByKeys($assetData, [
+                        'irr',
+                        'rial',
+                        'price_irr',
+                        'priceRial',
+                        'price_rial',
+                        'buy_irr',
+                        'sell_irr',
+                        'buyIrr',
+                        'sellIrr',
+                        'buy_rial',
+                        'sell_rial',
+                        'buyRial',
+                        'sellRial',
+                    ]);
+                    if ($rialValue !== null) {
+                        return $rialValue;
+                    }
+
+                    $tomanValue = $findNumericValueByKeys($assetData, [
+                        'irt',
+                        'toman',
+                        'price_irt',
+                        'priceToman',
+                        'price_toman',
+                        'buy_irt',
+                        'sell_irt',
+                        'buyIrt',
+                        'sellIrt',
+                        'buy_toman',
+                        'sell_toman',
+                        'buyToman',
+                        'sellToman',
+                    ]);
+                    if ($tomanValue !== null) {
+                        return $tomanValue * 10.0;
+                    }
+
+                    error_log('Missing or invalid rate for ' . $symbol . ' from Tron rate API');
+                    return null;
+                };
+
+                $resolveAssetData = static function (array $rates, array $candidates, string $symbol) {
+                    foreach ($candidates as $candidate) {
+                        if (isset($rates[$candidate]) && is_array($rates[$candidate])) {
+                            return $rates[$candidate];
+                        }
+                    }
+
+                    foreach ($rates as $value) {
+                        if (!is_array($value)) {
+                            continue;
+                        }
+
+                        $code = $value['symbol']
+                            ?? $value['code']
+                            ?? $value['title']
+                            ?? $value['currency']
+                            ?? $value['name']
+                            ?? $value['id']
+                            ?? null;
+                        if (is_string($code) && strcasecmp(trim($code), $symbol) === 0) {
+                            return $value;
+                        }
+                    }
+
+                    return null;
+                };
+
+                $normalizedRates = is_array($tronData['rates'] ?? null) ? $tronData['rates'] : $tronData;
+
+                if ($needsTrx) {
+                    $trxRate = $extractRate($resolveAssetData($normalizedRates, ['tron', 'trx', 'TRX'], 'TRX'), 'TRX');
+                    if ($trxRate === null) {
+                        $missingKeys[] = 'TRX';
+                    } else {
+                        $result['TRX'] = round($trxRate / 10, 2);
+                    }
+                }
+
+                if ($needsTon) {
+                    $tonRate = $extractRate($resolveAssetData($normalizedRates, ['toncoin', 'ton', 'TON'], 'Ton'), 'Ton');
+                    if ($tonRate === null) {
+                        $missingKeys[] = 'Ton';
+                    } else {
+                        $result['Ton'] = round($tonRate / 10, 2);
+                    }
+                }
+            }
         }
     }
 
     if ($needsUsd) {
-        // The bot historically returns "USD" as USDT-to-IRT (toman/irt) rate.
-        $usdtIrt = $getPair($prices, 'USDT', 'IRT');
-        if ($usdtIrt === null) {
-            error_log('Missing or invalid USDT/IRT price from SwapWallet');
+        $usdResponse = @file_get_contents('https://sarfe.erfjab.com/api/prices', false, $context);
+        if ($usdResponse === false) {
+            error_log('Failed to fetch USD price from Sarfe API');
             $missingKeys[] = 'USD';
         } else {
-            $result['USD'] = round($usdtIrt, 2);
+            $usdData = json_decode($usdResponse, true);
+            if (!is_array($usdData)) {
+                error_log('Invalid response received from Sarfe API');
+                $missingKeys[] = 'USD';
+            } else {
+                $usdPrice = null;
+                $usdRawValues = [];
+                foreach (['usd1', 'usd2'] as $usdKey) {
+                    if (!array_key_exists($usdKey, $usdData)) {
+                        continue;
+                    }
+
+                    $rawValue = $usdData[$usdKey];
+                    $usdRawValues[$usdKey] = $rawValue;
+
+                    if (is_string($rawValue)) {
+                        $normalizedValue = preg_replace('/[^\d\.\-]/u', '', $rawValue);
+                    } elseif (is_numeric($rawValue)) {
+                        $normalizedValue = (string) $rawValue;
+                    } else {
+                        continue;
+                    }
+
+                    if (!is_numeric($normalizedValue)) {
+                        continue;
+                    }
+
+                    $numericValue = abs((float) $normalizedValue);
+                    if ($numericValue > 0.0) {
+                        $usdPrice = $numericValue;
+                        break;
+                    }
+                }
+
+                if ($usdPrice === null) {
+                    $rawLog = '';
+                    if (!empty($usdRawValues)) {
+                        $rawLog = ' Raw values: ' . json_encode($usdRawValues);
+                    }
+                    error_log('Missing USD price from Sarfe API.' . $rawLog);
+                    $missingKeys[] = 'USD';
+                } else {
+                    $result['USD'] = round($usdPrice, 2);
+                }
+            }
         }
     }
 
-    return ['ok' => empty($missingKeys), 'result' => $result];
-}
+    $ok = empty($missingKeys);
 
+    return ['ok' => $ok, 'result' => $result];
+}
 
 function requireTronRates(array $keys = [])
 {
@@ -1188,132 +1410,196 @@ function trnado($order_id, $price)
 {
     global $domainhosts;
 
-    $errorId = 'TRN-' . bin2hex(random_bytes(4));
-
     $apitronseller = select("PaySetting", "*", "NamePay", "apiternado", "select")['ValuePay'];
     $walletSetting = select("PaySetting", "*", "NamePay", "walletaddress", "select");
     $walletaddress = trim((string) ($walletSetting['ValuePay'] ?? ''));
     $configuredUrl = trim((string) (select("PaySetting", "*", "NamePay", "urlpaymenttron", "select")['ValuePay'] ?? ''));
 
-    if ($configuredUrl === '') {
-        $configuredUrl = 'https://bot.tronado.cloud/api/v3/GetOrderToken';
+    $defaultEndpoints = defined('TRONADO_ORDER_TOKEN_ENDPOINTS') ? TRONADO_ORDER_TOKEN_ENDPOINTS : [];
+
+    if (empty($defaultEndpoints)) {
+        $defaultEndpoints = ['https://bot.tronado.cloud/api/v1/Order/GetOrderToken'];
     }
 
-    if ($walletaddress === '') {
-        $lastErrorPayload = [
-            'success'  => false,
-            'error'    => 'آدرس کیف پول تنظیم نشده است',
-            'error_id' => $errorId,
-        ];
-        error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $lastErrorPayload;
+    $endpoints = $defaultEndpoints;
+    if ($configuredUrl !== '') {
+        array_unshift($endpoints, $configuredUrl);
+        $endpoints = array_values(array_unique($endpoints));
     }
-
-    $trxAmountStr = number_format((float)$price, 6, '.', '');
 
     $callbackUrl = 'https://' . $domainhosts . '/payment/tronado.php';
-
-    $fields = [
-        'PaymentID'                  => (string)$order_id,
-        'WalletAddress'              => $walletaddress,
-        'TronAmount'                 => $trxAmountStr,
-        'CallbackUrl'                => $callbackUrl,
-        'wageFromBusinessPercentage' => '0',
-        'apiVersion'                 => '1',
+    $requestPayload = [
+        'PaymentID' => (string) $order_id,
+        'Amount' => is_numeric($price) ? (float) $price : $price,
+        'Wallet' => $walletaddress,
+        'CallbackUrl' => $callbackUrl,
+        'OrderId' => (string) $order_id,
+        'Metadata' => [
+            'PaymentID' => (string) $order_id,
+        ],
     ];
 
-    $ch = curl_init($configuredUrl);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => $fields, 
-        CURLOPT_HTTPHEADER     => [
-            'x-api-key: ' . $apitronseller,
-        ],
-        CURLOPT_TIMEOUT        => 20,
-    ]);
-
-    $response = curl_exec($ch);
-    $errno    = curl_errno($ch);
-    $errstr   = curl_error($ch);
-    $status   = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-    curl_close($ch);
-
-    if ($errno) {
-        $lastErrorPayload = [
-            'success'  => false,
-            'error'    => "cURL error ($errno): $errstr",
-            'http'     => $status,
-            'error_id' => $errorId,
+    if ($walletaddress === '') {
+        return [
+            'success' => false,
+            'error' => 'آدرس کیف پول تنظیم نشده است',
         ];
-        error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $lastErrorPayload;
     }
 
-    if ($status < 200 || $status >= 300) {
-        $lastErrorPayload = [
-            'success'  => false,
-            'error'    => "HTTP $status",
-            'http'     => $status,
-            'body'     => mb_substr((string)$response, 0, 500, 'UTF-8'),
-            'error_id' => $errorId,
-        ];
-        error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $lastErrorPayload;
-    }
+    $payloadJson = json_encode($requestPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $lastErrorPayload = [
+        'success' => false,
+        'error' => 'Failed to contact Tronado gateway',
+    ];
 
-    $json = json_decode((string)$response, true);
-    if (!is_array($json)) {
-        $lastErrorPayload = [
-            'success'  => false,
-            'error'    => 'پاسخ نامعتبر از ترنادو',
-            'body'     => mb_substr((string)$response, 0, 500, 'UTF-8'),
-            'error_id' => $errorId,
-        ];
-        error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-        return $lastErrorPayload;
-    }
+    foreach ($endpoints as $endpoint) {
+        if ($endpoint === '') {
+            continue;
+        }
 
-    if (!empty($json['IsSuccessful'])) {
-        $token = $json['Data']['Token'] ?? null;
-        if (!$token) {
+        $curl = curl_init();
+        curl_setopt_array($curl, array(
+            CURLOPT_URL => $endpoint,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_ENCODING => '',
+            CURLOPT_MAXREDIRS => 10,
+            CURLOPT_TIMEOUT => 0,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $payloadJson,
+            CURLOPT_HTTPHEADER => array(
+                'x-api-key: ' . $apitronseller,
+                'Content-Type: application/json',
+            ),
+        ));
+
+        $response = curl_exec($curl);
+        $curlErrno = curl_errno($curl);
+        $curlError = curl_error($curl);
+        $curlInfo = curl_getinfo($curl);
+        $statusCode = $curlInfo['http_code'] ?? null;
+
+        $responseExcerpt = '';
+        if ($response !== false && $response !== null) {
+            $responseExcerpt = function_exists('mb_substr') ? mb_substr($response, 0, 500) : substr($response, 0, 500);
+        }
+
+        $attemptLog = [
+            'method' => 'POST',
+            'url' => $endpoint,
+            'http_code' => $statusCode,
+        ];
+        if ($responseExcerpt !== '') {
+            $attemptLog['response_excerpt'] = $responseExcerpt;
+        }
+        if ($curlError !== '') {
+            $attemptLog['curl_error'] = $curlError;
+        }
+
+        error_log('Tronado request attempt: ' . json_encode($attemptLog, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+        if ($response === false) {
             $lastErrorPayload = [
-                'success'  => false,
-                'error'    => 'Token خالی در پاسخ موفق ترنادو',
-                'raw'      => $json,
-                'error_id' => $errorId,
+                'success' => false,
+                'error' => $curlError !== '' ? $curlError : 'cURL execution failed',
+                'status_code' => $statusCode,
+                'errno' => $curlErrno,
+                'url' => $endpoint,
             ];
-            error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            curl_close($curl);
+            continue;
+        }
+
+        if ($statusCode !== null && $statusCode >= 400) {
+            $lastErrorPayload = [
+                'success' => false,
+                'error' => 'Unexpected HTTP status code returned',
+                'status_code' => $statusCode,
+                'raw_response' => $response,
+                'url' => $endpoint,
+            ];
+
+            curl_close($curl);
+
+            if ($statusCode === 404) {
+                continue;
+            }
+
+            error_log('Tronado payment request failed: ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
             return $lastErrorPayload;
         }
 
-        return [
-            'success'        => true,
-            'IsSuccessful'   => true,
-            'Data'           => ['Token' => $token],
-            'FullPaymentUrl' => $json['Data']['FullPaymentUrl'] ?? null,
-            'raw'            => $json,
-            'error_id'       => $errorId,
-        ];
+        $decodedResponse = json_decode($response, true);
+        if (!is_array($decodedResponse) || !array_key_exists('IsSuccessful', $decodedResponse) || !array_key_exists('Data', $decodedResponse)) {
+            $errorPayload = [
+                'success' => false,
+                'error' => 'Invalid response structure received from Tronado gateway',
+                'status_code' => $statusCode,
+                'raw_response' => $response,
+                'url' => $endpoint,
+            ];
+
+            error_log('Tronado payment invalid response: ' . json_encode($errorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+            curl_close($curl);
+
+            return $errorPayload;
+        }
+
+        curl_close($curl);
+
+        return $decodedResponse;
     }
 
-    $lastErrorPayload = [
-        'success'  => false,
-        'error'    => $json['Message'] ?? 'خطای نامشخص ترنادو',
-        'code'     => $json['Code'] ?? null,
-        'raw'      => $json,
-        'error_id' => $errorId,
-    ];
-    error_log('[Tronado] ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    error_log('Tronado payment request failed: ' . json_encode($lastErrorPayload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
     return $lastErrorPayload;
 }
-
 function formatBytes($bytes, $precision = 2): string
 {
     $base = log($bytes, 1024);
     $power = $bytes > 0 ? floor($base) : 0;
     $suffixes = ['بایت', 'کیلوبایت', 'مگابایت', 'گیگابایت', 'ترابایت'];
     return round(pow(1024, $base - $power), $precision) . ' ' . $suffixes[$power];
+}
+function formatOnlineAtLabel($onlineAt, $isOnline = null)
+{
+    if ($isOnline === true && (empty($onlineAt) || $onlineAt === null)) {
+        return "Online (بدون زمان)";
+    }
+
+    if ($onlineAt === null || $onlineAt === '') {
+        return "—";
+    }
+
+    if (is_string($onlineAt)) {
+        $onlineAt = trim($onlineAt);
+        if ($onlineAt === '') {
+            return "—";
+        }
+        $lowered = strtolower($onlineAt);
+        if ($lowered === 'online') {
+            return 'آنلاین';
+        }
+        if ($lowered === 'offline') {
+            return 'آفلاین';
+        }
+    }
+
+    try {
+        if (is_numeric($onlineAt)) {
+            $dateTime = new DateTime('@' . intval($onlineAt));
+            $dateTime->setTimezone(new DateTimeZone('Asia/Tehran'));
+        } else {
+            $dateTime = new DateTime((string) $onlineAt, new DateTimeZone('UTC'));
+            $dateTime->setTimezone(new DateTimeZone('Asia/Tehran'));
+        }
+        return jdate('Y/m/d H:i:s', $dateTime->getTimestamp());
+    } catch (Exception $e) {
+        return (string) $onlineAt;
+    }
 }
 function generateUsername($from_id, $Metode, $username, $randomString, $text, $namecustome, $usernamecustom)
 {
@@ -1384,6 +1670,7 @@ function outputlunksub($url)
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
 
     $headers = array();
     $headers[] = 'Accept: application/json';
@@ -1598,7 +1885,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     update("user", "Balance", $Balance_prim, "id", $Balance_id['affiliates']);
                     $result = number_format($result);
                     $textadd = "🎁  پرداخت پورسانت 
-
+        
         مبلغ $result تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید";
                     $textreportport = "
 مبلغ $result به کاربر {$Balance_id['affiliates']} برای پورسانت از کاربر {$Balance_id['id']} واریز گردید 
@@ -1627,7 +1914,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 update("user", "Balance", $Balance_prim, "id", $Balance_id['affiliates']);
                 $result = number_format($result);
                 $textadd = "🎁  پرداخت پورسانت 
-
+        
         مبلغ $result تومان به حساب شما از طرف  زیر مجموعه تان به کیف پول شما واریز گردید";
                 $textreportport = "
 مبلغ $result به کاربر {$Balance_id['affiliates']} برای پورسانت از کاربر {$Balance_id['id']} واریز گردید 
@@ -1826,7 +2113,7 @@ $textonebuy
         }
         $priceproductformat = number_format($prodcut['price_product']);
         $textextend = "✅ تمدید برای سرویس شما با موفقیت صورت گرفت
-
+ 
 ▫️نام سرویس : $usernamepanel
 ▫️نام محصول : {$prodcut['name_product']}
 ▫️مبلغ تمدید $priceproductformat تومان
@@ -1839,7 +2126,7 @@ $textonebuy
         }
         $timejalali = jdate('Y/m/d H:i:s');
         $text_report = "📣 جزئیات تمدید اکانت در ربات شما ثبت شد .
-
+    
 ▫️آیدی عددی کاربر : <code>{$Balance_id['id']}</code>
 ▫️نام کاربری کاربر : @{$Balance_id['username']}
 ▫️نام کاربری کانفیگ :$usernamepanel
@@ -1936,7 +2223,7 @@ $textonebuy
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
         $textvolume = "✅ افزایش حجم برای سرویس شما با موفقیت صورت گرفت
-
+ 
 ▫️نام سرویس  : {$steppay[0]}
 ▫️حجم اضافه : $volume گیگ
 
@@ -1958,7 +2245,7 @@ $textonebuy
         }
         update("invoice", "Status", "active", "id_invoice", $nameloc['id_invoice']);
         $text_report = "⭕️ یک کاربر حجم اضافه خریده است
-
+        
 اطلاعات کاربر : 
 🪪 آیدی عددی : {$Balance_id['id']}
 🛍 حجم خریداری شده  : $volumes گیگ
@@ -2036,7 +2323,7 @@ $textonebuy
             update("user", "score", $scorenew, "id", $Balance_id['id']);
         }
         $textextratime = "✅ افزایش زمان برای سرویس شما با موفقیت صورت گرفت
-
+ 
 ▫️نام سرویس : {$steppay[0]}
 ▫️زمان اضافه : $tmieextra روز
 
@@ -2058,7 +2345,7 @@ $textonebuy
         }
         update("invoice", "Status", "active", "id_invoice", $nameloc['id_invoice']);
         $text_report = "⭕️ یک کاربر زمان اضافه خریده است
-
+        
 اطلاعات کاربر : 
 🪪 آیدی عددی : {$Balance_id['id']}
 🛍 زمان خریداری شده  : $volumes روز
@@ -2089,7 +2376,7 @@ $textonebuy
             Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
         }
         sendmessage($Payment_report['id_user'], "💎 کاربر گرامی مبلغ {$Payment_report['price']} تومان به کیف پول شما واریز گردید با تشکراز پرداخت شما.
-
+                
 🛒 کد پیگیری شما: {$Payment_report['id_order']}", null, 'HTML');
     }
 }
@@ -2165,9 +2452,11 @@ function addFieldToTable($tableName, $fieldName, $defaultValue = null, $datatype
 }
 function outtypepanel($typepanel, $message)
 {
-    global $from_id, $optionMarzban, $optionX_ui_single, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
+    global $from_id, $optionMarzban, $optionGuard, $optionX_ui_single, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
     if ($typepanel == "marzban") {
         sendmessage($from_id, $message, $optionMarzban, 'HTML');
+    } elseif ($typepanel == "guard") {
+        sendmessage($from_id, $message, $optionGuard, 'HTML');
     } elseif ($typepanel == "x-ui_single") {
         sendmessage($from_id, $message, $optionX_ui_single, 'HTML');
     } elseif ($typepanel == "hiddify") {
@@ -2447,72 +2736,6 @@ function isClientIpInRange($clientIp, $lowerBound, $upperBound)
 
     return strcmp($clientPacked, $lowerPacked) >= 0 && strcmp($clientPacked, $upperPacked) <= 0;
 }
-
-function resolveCronHttpDirectory(): string
-{
-    static $cache = null;
-    if ($cache !== null) {
-        return $cache;
-    }
-
-    $configured = null;
-    if (defined('CRON_HTTP_BASE_PATH')) {
-        $configured = CRON_HTTP_BASE_PATH;
-    } elseif (($env = getenv('CRON_HTTP_BASE_PATH')) !== false) {
-        $configured = $env;
-    }
-
-    if (is_string($configured)) {
-        $configured = trim($configured);
-        if ($configured === '' || $configured === '/') {
-            return $cache = '';
-        }
-
-        return $cache = trim($configured, "/\\");
-    }
-
-    $preferredOrder = ['cronbot', 'cron'];
-    foreach ($preferredOrder as $candidate) {
-        $candidate = trim($candidate, "/\\");
-        if ($candidate === '') {
-            continue;
-        }
-
-        if (is_dir(APP_ROOT_PATH . '/' . $candidate)) {
-            return $cache = $candidate;
-        }
-    }
-
-    return $cache = 'cronbot';
-}
-
-function getCronHttpRelativePrefix(): string
-{
-    $directory = resolveCronHttpDirectory();
-    if ($directory === '') {
-        return '';
-    }
-
-    return trim($directory, "/\\") . '/';
-}
-
-function buildCronScriptUrlByHost(string $host, string $script): string
-{
-    $host = trim($host);
-    if ($host === '') {
-        $host = 'localhost';
-    }
-
-    $base = preg_match('~^https?://~i', $host) ? rtrim($host, '/') : 'https://' . $host;
-    $script = ltrim($script, '/');
-
-    $prefix = getCronHttpRelativePrefix();
-    if ($prefix !== '' && substr($prefix, -1) !== '/') {
-        $prefix .= '/';
-    }
-
-    return $base . '/' . $prefix . $script;
-}
 function addCronIfNotExists($cronCommand)
 {
     $commands = is_array($cronCommand) ? $cronCommand : [$cronCommand];
@@ -2581,360 +2804,26 @@ function activecron()
 {
     global $domainhosts;
 
-    $host = null;
-    if (isset($domainhosts) && is_string($domainhosts) && trim($domainhosts) !== '') {
-        $host = $domainhosts;
-    }
-
-    if ($host === null || trim((string) $host) === '') {
-        $host = $_SERVER['HTTP_HOST'] ?? null;
-    }
-
-    if ($host === null || trim((string) $host) === '') {
-        $host = 'localhost';
-    }
-
-    $normalizedHost = preg_match('~^https?://~i', $host)
-        ? rtrim($host, '/')
-        : 'https://' . trim($host, '/');
-
-    $cronEndpoint = $normalizedHost . '/cron/cron.php';
-
-    $cronCommands = ["*/1 * * * * curl {$cronEndpoint}"];
+    $cronCommands = [
+        "*/15 * * * * curl https://$domainhosts/cronbot/statusday.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/croncard.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/NoticationsService.php",
+        "*/5 * * * * curl https://$domainhosts/cronbot/payment_expire.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/sendmessage.php",
+        "*/3 * * * * curl https://$domainhosts/cronbot/plisio.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/activeconfig.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/disableconfig.php",
+        "*/1 * * * * curl https://$domainhosts/cronbot/iranpay1.php",
+        "0 */5 * * * curl https://$domainhosts/cronbot/backupbot.php",
+        "*/2 * * * * curl https://$domainhosts/cronbot/gift.php",
+        "*/30 * * * * curl https://$domainhosts/cronbot/expireagent.php",
+        "*/15 * * * * curl https://$domainhosts/cronbot/on_hold.php",
+        "*/2 * * * * curl https://$domainhosts/cronbot/configtest.php",
+        "*/15 * * * * curl https://$domainhosts/cronbot/uptime_node.php",
+        "*/15 * * * * curl https://$domainhosts/cronbot/uptime_panel.php",
+    ];
 
     addCronIfNotExists($cronCommands);
-}
-
-
-function getCronJobDefinitions(): array
-{
-    return [
-        'statusday' => [
-            'script' => 'statusday.php',
-            'admin_label' => 'کرون وضعیت روزانه',
-            'instruction' => '🕒 بررسی وضعیت روزانه — %s',
-            'default' => ['unit' => 'minute', 'value' => 15],
-        ],
-        'croncard' => [
-            'script' => 'croncard.php',
-            'admin_label' => 'کرون کارت‌به‌کارت',
-            'instruction' => '💳 انجام تراکنش‌های کارت‌به‌کارت — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'notifications' => [
-            'script' => 'NoticationsService.php',
-            'admin_label' => 'کرون اعلان‌ها',
-            'instruction' => '🔔 سرویس اعلان‌ها (Notification Service) — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'payment_expire' => [
-            'script' => 'payment_expire.php',
-            'admin_label' => 'کرون انقضای پرداخت',
-            'instruction' => '💳 بررسی انقضای پرداخت‌ها — %s',
-            'default' => ['unit' => 'minute', 'value' => 5],
-        ],
-        'sendmessage' => [
-            'script' => 'sendmessage.php',
-            'admin_label' => 'کرون ارسال پیام',
-            'instruction' => '📩 ارسال پیام‌ها — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'plisio' => [
-            'script' => 'plisio.php',
-            'admin_label' => 'کرون Plisio',
-            'instruction' => '💰 پردازش پرداخت‌های Plisio — %s',
-            'default' => ['unit' => 'minute', 'value' => 3],
-        ],
-        'activeconfig' => [
-            'script' => 'activeconfig.php',
-            'admin_label' => 'کرون فعال‌سازی تنظیمات',
-            'instruction' => '⚙️ فعال‌سازی تنظیمات جدید — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'disableconfig' => [
-            'script' => 'disableconfig.php',
-            'admin_label' => 'کرون غیرفعال‌سازی تنظیمات',
-            'instruction' => '🚫 غیرفعال‌سازی تنظیمات قدیمی — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'iranpay' => [
-            'script' => 'iranpay1.php',
-            'admin_label' => 'کرون ایران‌پی',
-            'instruction' => '🇮🇷 بررسی وضعیت پرداخت ایران‌پی — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'backup' => [
-            'script' => 'backupbot.php',
-            'admin_label' => 'کرون بکاپ',
-            'instruction' => '🗂 تهیه نسخه‌ی پشتیبان (Backup) — %s',
-            'default' => ['unit' => 'hour', 'value' => 5],
-        ],
-        'gift' => [
-            'script' => 'gift.php',
-            'admin_label' => 'کرون هدایا',
-            'instruction' => '🎁 ارسال هدایا (Gift System) — %s',
-            'default' => ['unit' => 'minute', 'value' => 2],
-        ],
-        'lottery' => [
-            'script' => 'lottery.php',
-            'admin_label' => 'قرعه‌کشی شبانه',
-            'instruction' => '🎁 قرعه‌کشی شبانه — %s',
-            'default' => ['unit' => 'minute', 'value' => 1],
-        ],
-        'expireagent' => [
-            'script' => 'expireagent.php',
-            'admin_label' => 'کرون انقضای نمایندگان',
-            'instruction' => '👥 بررسی انقضای نمایندگان — %s',
-            'default' => ['unit' => 'minute', 'value' => 30],
-        ],
-        'on_hold' => [
-            'script' => 'on_hold.php',
-            'admin_label' => 'کرون سرویس‌های معلق',
-            'instruction' => '⏸ بررسی وضعیت سفارش‌های معلق — %s',
-            'default' => ['unit' => 'minute', 'value' => 15],
-        ],
-        'configtest' => [
-            'script' => 'configtest.php',
-            'admin_label' => 'کرون تست تنظیمات',
-            'instruction' => '🧪 تست تنظیمات سیستم — %s',
-            'default' => ['unit' => 'minute', 'value' => 2],
-        ],
-        'uptime_node' => [
-            'script' => 'uptime_node.php',
-            'admin_label' => 'کرون Uptime نود',
-            'instruction' => '🌐 بررسی Uptime نودها — %s',
-            'default' => ['unit' => 'minute', 'value' => 15],
-        ],
-        'uptime_panel' => [
-            'script' => 'uptime_panel.php',
-            'admin_label' => 'کرون Uptime پنل',
-            'instruction' => '🖥 بررسی Uptime پنل‌ها — %s',
-            'default' => ['unit' => 'minute', 'value' => 15],
-        ],
-    ];
-}
-
-function getDefaultCronSchedules(): array
-{
-    $defaults = [];
-    foreach (getCronJobDefinitions() as $key => $definition) {
-        $defaults[$key] = $definition['default'];
-    }
-
-    return $defaults;
-}
-
-function normalizeCronScheduleConfig(array $config, array $default): array
-{
-    $unit = isset($config['unit']) ? strtolower((string) $config['unit']) : $default['unit'];
-    $validUnits = ['minute', 'hour', 'day', 'disabled'];
-    if (!in_array($unit, $validUnits, true)) {
-        $unit = $default['unit'];
-    }
-
-    $value = isset($config['value']) ? (int) $config['value'] : $default['value'];
-    if ($unit === 'disabled') {
-        $value = 0;
-    } elseif ($value < 1) {
-        $value = $default['value'];
-    }
-
-    return [
-        'unit' => $unit,
-        'value' => $value,
-    ];
-}
-
-function ensureCronRuntimeStateTable(PDO $pdo): void
-{
-    try {
-        $pdo->exec("CREATE TABLE IF NOT EXISTS cron_runtime_state (
-            job_key VARCHAR(255) PRIMARY KEY,
-            last_run BIGINT(20) UNSIGNED NOT NULL DEFAULT 0,
-            unit VARCHAR(20) NOT NULL DEFAULT 'minute',
-            value INT(10) UNSIGNED NOT NULL DEFAULT 1,
-            enabled TINYINT(1) NOT NULL DEFAULT 1,
-            created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
-    } catch (PDOException $e) {
-        error_log('ensureCronRuntimeStateTable: ' . $e->getMessage());
-    }
-}
-
-function loadCronRuntimeState(PDO $pdo): array
-{
-    $state = [];
-    try {
-        $stmt = $pdo->query("SELECT job_key, last_run FROM cron_runtime_state");
-        if ($stmt !== false) {
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $jobKey = isset($row['job_key']) ? trim((string) $row['job_key']) : '';
-                if ($jobKey === '') {
-                    continue;
-                }
-                $state[$jobKey] = isset($row['last_run']) ? (int) $row['last_run'] : 0;
-            }
-        }
-    } catch (PDOException $e) {
-        error_log('loadCronRuntimeState: ' . $e->getMessage());
-    }
-
-    return $state;
-}
-
-function setCronJobLastRun(PDO $pdo, string $jobKey, int $timestamp): void
-{
-    $jobKey = trim($jobKey);
-    if ($jobKey === '') {
-        return;
-    }
-
-    try {
-        $stmt = $pdo->prepare("INSERT INTO cron_runtime_state (job_key, last_run) VALUES (:job_key, :last_run) ON DUPLICATE KEY UPDATE last_run = VALUES(last_run)");
-        $stmt->bindValue(':job_key', $jobKey, PDO::PARAM_STR);
-        $stmt->bindValue(':last_run', $timestamp, PDO::PARAM_INT);
-        $stmt->execute();
-    } catch (PDOException $e) {
-        error_log('setCronJobLastRun: ' . $e->getMessage());
-    }
-}
-
-function loadCronSchedules(): array
-{
-    $definitions = getCronJobDefinitions();
-    $schedules = getDefaultCronSchedules();
-    $pdo = getDatabaseConnection();
-    if (!($pdo instanceof PDO)) {
-        return $schedules;
-    }
-
-    ensureCronRuntimeStateTable($pdo);
-
-    try {
-        $stmt = $pdo->query("SELECT job_key, unit, value, enabled FROM cron_runtime_state");
-        if ($stmt === false) {
-            return $schedules;
-        }
-
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $jobKey = isset($row['job_key']) ? trim((string) $row['job_key']) : '';
-            if ($jobKey === '' || !isset($definitions[$jobKey])) {
-                continue;
-            }
-
-            $unit = $row['unit'] ?? $definitions[$jobKey]['default']['unit'] ?? 'minute';
-            $value = isset($row['value']) ? (int) $row['value'] : ($definitions[$jobKey]['default']['value'] ?? 1);
-            $enabled = isset($row['enabled']) && (int) $row['enabled'] === 0 ? false : true;
-            $scheduleConfig = ['unit' => $unit, 'value' => $value];
-            if (!$enabled) {
-                $scheduleConfig['unit'] = 'disabled';
-                $scheduleConfig['value'] = 1;
-            }
-
-            $schedules[$jobKey] = normalizeCronScheduleConfig($scheduleConfig, $definitions[$jobKey]['default']);
-        }
-    } catch (PDOException $e) {
-        error_log('loadCronSchedules: ' . $e->getMessage());
-    }
-
-    return $schedules;
-}
-
-function updateCronSchedule(string $jobKey, array $config): bool
-{
-    $definitions = getCronJobDefinitions();
-    if (!isset($definitions[$jobKey])) {
-        return false;
-    }
-
-    $normalized = normalizeCronScheduleConfig($config, $definitions[$jobKey]['default']);
-    $pdo = getDatabaseConnection();
-    if (!($pdo instanceof PDO)) {
-        return false;
-    }
-
-    ensureCronRuntimeStateTable($pdo);
-    $enabled = $normalized['unit'] === 'disabled' ? 0 : 1;
-
-    try {
-        $stmt = $pdo->prepare("INSERT INTO cron_runtime_state (job_key, unit, value, enabled) VALUES (:job_key, :unit, :value, :enabled) ON DUPLICATE KEY UPDATE unit = VALUES(unit), value = VALUES(value), enabled = VALUES(enabled)");
-        $stmt->bindValue(':job_key', $jobKey, PDO::PARAM_STR);
-        $stmt->bindValue(':unit', $normalized['unit'], PDO::PARAM_STR);
-        $stmt->bindValue(':value', $normalized['value'], PDO::PARAM_INT);
-        $stmt->bindValue(':enabled', $enabled, PDO::PARAM_INT);
-        return $stmt->execute();
-    } catch (PDOException $e) {
-        error_log('updateCronSchedule: ' . $e->getMessage());
-        return false;
-    }
-}
-
-function describeCronSchedule(array $config): string
-{
-    $unitLabels = [
-        'minute' => 'دقیقه',
-        'hour' => 'ساعت',
-        'day' => 'روز',
-        'disabled' => 'غیرفعال',
-    ];
-
-    $unit = $config['unit'] ?? 'minute';
-    $value = isset($config['value']) ? (int) $config['value'] : 1;
-    if ($value < 1) {
-        $value = 1;
-    }
-
-    if ($unit === 'disabled') {
-        return $unitLabels['disabled'];
-    }
-
-    $unitLabel = $unitLabels[$unit] ?? $unitLabels['minute'];
-    return sprintf('هر %d %s', $value, $unitLabel);
-}
-
-function shouldRunCronJob(array $config, int $minute, int $hour, int $dayOfYear): bool
-{
-    $unit = $config['unit'] ?? 'minute';
-    $value = isset($config['value']) ? (int) $config['value'] : 1;
-    if ($value < 1) {
-        $value = 1;
-    }
-
-    if ($unit === 'disabled') {
-        return false;
-    }
-
-    switch ($unit) {
-        case 'minute':
-            return $minute % $value === 0;
-        case 'hour':
-            return $minute === 0 && ($hour % $value === 0);
-        case 'day':
-            return $minute === 0 && $hour === 0 && ($dayOfYear % $value === 0);
-        default:
-            return false;
-    }
-}
-
-function buildCronInstructionDetails(string $domainHost): string
-{
-    $definitions = getCronJobDefinitions();
-    $schedules = loadCronSchedules();
-    $parts = [];
-
-    foreach ($definitions as $key => $definition) {
-        if (!isset($definition['instruction'], $definition['script'])) {
-            continue;
-        }
-        $schedule = $schedules[$key] ?? $definition['default'];
-        $description = describeCronSchedule($schedule);
-        $title = sprintf($definition['instruction'], $description);
-        $endpoint = buildCronScriptUrlByHost($domainHost, $definition['script']);
-        $parts[] = "<b>{$title}</b>\n<code>curl " . htmlspecialchars($endpoint, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code>";
-    }
-
-    return implode("\n\n", $parts);
 }
 
 function inlineFixer($str, int $count_button = 1)
@@ -3588,17 +3477,4 @@ function createPayaqayepardakht($price, $order_id)
     $response = curl_exec($curl);
     curl_close($curl);
     return json_decode($response, true);
-}
-function deleteInvoiceFromList($invoiceId, $userId)
-{
-    global $pdo;
-    try {
-        $stmt = $pdo->prepare("DELETE FROM invoice WHERE id_invoice = :invoiceId AND id_user = :userId");
-        $stmt->bindParam(':invoiceId', $invoiceId);
-        $stmt->bindParam(':userId', $userId);
-        return $stmt->execute();
-    } catch (PDOException $e) {
-        error_log('Failed to delete invoice: ' . $e->getMessage());
-        return false;
-    }
 }

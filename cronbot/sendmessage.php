@@ -1,226 +1,177 @@
 <?php
-$isCLI = (php_sapi_name() === 'cli');
-$isCron = ($isCLI || !isset($_SERVER['HTTP_HOST']));
-@ini_set('output_buffering', 'off');
-@ini_set('implicit_flush', true);
-@set_time_limit(30);
-@ini_set('memory_limit', '128M');
-$baseDir = dirname(__FILE__);
 date_default_timezone_set('Asia/Tehran');
-require_once $baseDir . '/../config.php';
-require_once $baseDir . '/../botapi.php';
-require_once $baseDir . '/../function.php';
-$lockFile = $baseDir . '/broadcast.lock';
-if (file_exists($lockFile) && (time() - filemtime($lockFile)) < 300) {
-    exit;
+require_once __DIR__.'/../config.php';
+require_once __DIR__.'/../botapi.php';
+require_once __DIR__.'/../function.php';
+@ignore_user_abort(true);
+@set_time_limit(0);
+$base=__DIR__;
+$infoPath=$base.'/info';
+$usersPath=$base.'/users.json';
+$statsPath=$base.'/stats.json';
+$lockPath=$base.'/broadcast.lock';
+$lock=@fopen($lockPath,'c');
+if(!$lock||!@flock($lock,LOCK_EX|LOCK_NB)){return;}
+if(!is_file($infoPath)||!is_file($usersPath)){return;}
+$info=json_decode(@file_get_contents($infoPath),true);
+if(!is_array($info)){$info=[];}
+$usersRaw=@file_get_contents($usersPath);
+$usersArr=json_decode($usersRaw,true);
+if(!is_array($usersArr)){$usersArr=[];}
+$userIds=[];
+foreach($usersArr as $u){
+if(is_array($u)&&isset($u['id'])){$userIds[]=$u['id'];}
+elseif(is_object($u)&&isset($u->id)){$userIds[]=$u->id;}
+elseif(is_numeric($u)||is_string($u)){$userIds[]=$u;}
 }
-file_put_contents($lockFile, getmypid() . '|' . date('Y-m-d H:i:s'));
-try {
-    $cacheFile = $baseDir . '/textbot_cache.json';
-    if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 3600) {
-        $datatextbot = json_decode(file_get_contents($cacheFile), true);
-    } else {
-        $datatextbotget = select("textbot", "*", null, null, "fetchAll");
-        $datatxtbot = array();
-        foreach ($datatextbotget as $row) {
-            $datatxtbot[] = array(
-                'id_text' => $row['id_text'],
-                'text' => $row['text']
-            );
-        }
-        $datatextbot = array(
-            'text_usertest' => '',
-            'text_support' => '',
-            'text_help' => '',
-            'text_sell' => '',
-            'text_affiliates' => '',
-            'text_Add_Balance' => ''
-        );
-        foreach ($datatxtbot as $item) {
-            if (isset($datatextbot[$item['id_text']])) {
-                $datatextbot[$item['id_text']] = $item['text'];
-            }
-        }
-        file_put_contents($cacheFile, json_encode($datatextbot, JSON_UNESCAPED_UNICODE));
-    }
-    $infoFile = $baseDir . '/info';
-    $usersFile = $baseDir . '/users.json';
-    if (!is_file($infoFile)) {
-        @unlink($lockFile);
-        exit;
-    }
-    if (!is_file($usersFile)) {
-        @unlink($lockFile);
-        exit;
-    }
-    $useridContent = file_get_contents($usersFile);
-    $infoContent = file_get_contents($infoFile);
-    if ($useridContent === false || $infoContent === false) {
-        @unlink($lockFile);
-        exit;
-    }
-    $userid = json_decode($useridContent);
-    $info = json_decode($infoContent, true);
-    if (!is_array($userid) || !is_array($info)) {
-        @unlink($lockFile);
-        exit;
-    }
-
-    if (count($userid) == 0) {
-        if (isset($info['id_admin']) && isset($info['id_message'])) {
-            deletemessage($info['id_admin'], $info['id_message']);
-
-            sendmessage($info['id_admin'], "✅ عملیات ارسال پیام با موفقیت به پایان رسید.\n\n📊 گزارش نهایی عملیات تکمیل شد.", null, 'HTML');
-        }
-        @unlink($infoFile);
-        @unlink($usersFile);
-        @unlink($cacheFile);
-        @unlink($usersFile . '.tmp');
-        @unlink($lockFile);
-        exit;
-    }
-
-    $keyboards = [
-        'none' => null,
-        'buy' => json_encode(['inline_keyboard' => [[['text' => $datatextbot['text_sell'], 'callback_data' => 'buy']]]]),
-        'start' => json_encode(['inline_keyboard' => [[['text' => "شروع", 'callback_data' => 'start']]]]),
-        'usertestbtn' => json_encode(['inline_keyboard' => [[['text' => $datatextbot['text_usertest'], 'callback_data' => 'usertestbtn']]]]),
-        'helpbtn' => json_encode(['inline_keyboard' => [[['text' => $datatextbot['text_help'], 'callback_data' => 'helpbtn']]]]),
-        'affiliatesbtn' => json_encode(['inline_keyboard' => [[['text' => $datatextbot['text_affiliates'], 'callback_data' => 'affiliatesbtn']]]]),
-        'addbalance' => json_encode(['inline_keyboard' => [[['text' => $datatextbot['text_Add_Balance'], 'callback_data' => 'Add_Balance']]]]),
-    ];
-    $cancelmessage = json_encode(['inline_keyboard' => [[['text' => "لغو عملیات", 'callback_data' => 'cancel_sendmessage']]]]);
-    $batchSize = 150;
-    $softTimeLimit = 28;
-    $batchStartTime = microtime(true);
-    $processed = 0;
-    $success = 0;
-    $blocked = 0;
-    $deleted = 0;
-    $failed = 0;
-    $chatNotFound = 0;
-    $deleteStmt = $pdo->prepare("DELETE FROM user WHERE id = :id");
-    while (!empty($userid) && $processed < $batchSize) {
-        $elapsed = microtime(true) - $batchStartTime;
-        if ($elapsed >= $softTimeLimit) {
-            break;
-        }
-        $iduser = array_shift($userid);
-        if (!isset($iduser->id) || !is_numeric($iduser->id)) {
-            continue;
-        }
-        $processed++;
-        $userId = $iduser->id;
-        if ($info['type'] == "unpinmessage") {
-            unpinmessage($userId);
-        } elseif ($info['type'] == "sendmessage" || $info['type'] == "xdaynotmessage") {
-            $keyboard = $keyboards[$info['btnmessage']] ?? null;
-            $meesage = sendmessage($userId, $info['message'], $keyboard, 'HTML');
-            if (isset($meesage['ok']) && !$meesage['ok']) {
-                $errorDesc = $meesage['description'] ?? 'unknown error';
-                if ($errorDesc == "Forbidden: bot was blocked by the user") {
-                    $blocked++;
-                    $checkStmt = $pdo->prepare("SELECT
-                        (SELECT COUNT(*) FROM invoice WHERE id_user = :id) as invoice_count,
-                        Balance
-                        FROM user WHERE id = :id2 LIMIT 1");
-                    $checkStmt->execute([':id' => $userId, ':id2' => $userId]);
-                    $result = $checkStmt->fetch(PDO::FETCH_ASSOC);
-                    if ($result && $result['invoice_count'] == 0 && $result['Balance'] == 0) {
-                        $deleteStmt->execute([':id' => $userId]);
-                        $deleted++;
-                    }
-                } elseif (strpos($errorDesc, 'chat not found') !== false) {
-                    $chatNotFound++;
-                    $deleteStmt->execute([':id' => $userId]);
-                    $deleted++;
-                } else {
-                    $failed++;
-                }
-            } elseif (isset($meesage['ok']) && $meesage['ok']) {
-                $success++;
-                if (isset($info['pingmessage']) && $info['pingmessage'] == "yes" &&
-                    isset($meesage['result']['message_id'])) {
-                    pinmessage($userId, $meesage['result']['message_id']);
-                }
-            }
-        } elseif ($info['type'] == "forwardmessage") {
-            $meesage = forwardMessage($info['id_admin'], $info['message'], $userId);
-            if (isset($meesage['ok']) && !$meesage['ok']) {
-                $errorDesc = $meesage['description'] ?? 'unknown error';
-                if ($errorDesc == "Forbidden: bot was blocked by the user") {
-                    $blocked++;
-                } elseif (strpos($errorDesc, 'chat not found') !== false) {
-                    $chatNotFound++;
-                    $deleteStmt->execute([':id' => $userId]);
-                    $deleted++;
-                } else {
-                    $failed++;
-                }
-            } elseif (isset($meesage['ok']) && $meesage['ok']) {
-                $success++;
-                if (isset($info['pingmessage']) && $info['pingmessage'] == "yes" &&
-                    isset($meesage['result']['message_id'])) {
-                    pinmessage($userId, $meesage['result']['message_id']);
-                }
-            }
-        }
-        if ($processed % 25 == 0) {
-            usleep(50000);
-        }
-    }
-    $batchExecutionTime = microtime(true) - $batchStartTime;
-    $messagesPerSecond = $processed > 0 ? $processed / $batchExecutionTime : 0;
-    $count_remain = count($userid);
-
-    if ($count_remain == 0) {
-        if (isset($info['id_admin']) && isset($info['id_message'])) {
-            deletemessage($info['id_admin'], $info['id_message']);
-
-            $textfinish = "✅ عملیات ارسال پیام با موفقیت به پایان رسید.\n\n";
-            $textfinish .= "📊 گزارش نهایی:\n";
-            $textfinish .= "✅ موفق: " . number_format($success) . " پیام\n";
-            if ($blocked > 0) $textfinish .= "🚫 بلاک شده: " . number_format($blocked) . "\n";
-            if ($chatNotFound > 0) $textfinish .= "📵 Chat ناموجود: " . number_format($chatNotFound) . "\n";
-            if ($deleted > 0) $textfinish .= "🗑 حذف شده: " . number_format($deleted) . "\n";
-            if ($failed > 0) $textfinish .= "❌ خطا: " . number_format($failed) . "\n";
-
-            sendmessage($info['id_admin'], $textfinish, null, 'HTML');
-        }
-
-        @unlink($infoFile);
-        @unlink($usersFile);
-        @unlink($cacheFile);
-        @unlink($usersFile . '.tmp');
-        @unlink($lockFile);
-        exit;
-    }
-
-    $textprocces = "✏️ عملیات ارسال پیام درحال انجام...\n\n";
-    $textprocces .= "📊 باقی‌مانده: " . number_format($count_remain) . " نفر\n";
-    $textprocces .= "🚀 ارسال شده: " . number_format($processed) . " پیام\n";
-    $textprocces .= "✅ موفق: " . number_format($success);
-    if ($blocked > 0) $textprocces .= " | 🚫 بلاک: " . number_format($blocked);
-    if ($chatNotFound > 0) $textprocces .= " | 📵 Chat ناموجود: " . number_format($chatNotFound);
-    if ($deleted > 0) $textprocces .= " | 🗑 حذف: " . number_format($deleted);
-    if ($failed > 0) $textprocces .= " | ❌ خطا: " . number_format($failed);
-    $textprocces .= "\n\n⏱ زمان: " . round($batchExecutionTime, 1) . "s";
-    $textprocces .= " | 🔥 سرعت: " . round($messagesPerSecond, 1) . " پیام/ثانیه";
-    if (isset($info['id_admin']) && isset($info['id_message'])) {
-        Editmessagetext($info['id_admin'], $info['id_message'], $textprocces, $cancelmessage);
-    }
-
-    if ($count_remain > 0) {
-        $tempFile = $usersFile . '.tmp';
-        file_put_contents($tempFile, json_encode($userid, JSON_UNESCAPED_UNICODE));
-        if (file_exists($usersFile)) {
-            @unlink($usersFile);
-        }
-        rename($tempFile, $usersFile);
-    }
-} catch (Exception $e) {
-
-} finally {
-    @unlink($lockFile);
+$userIds=array_values(array_filter($userIds,function($v){return $v!==null&&$v!=='';}));
+$readStats=function()use($statsPath,$userIds,$info){
+$s=@file_get_contents($statsPath);
+$j=json_decode($s,true);
+if(!is_array($j)){
+$j=['started_at'=>time(),'total'=>count($userIds),'processed'=>0,'ok'=>0,'failed'=>0,'blocked'=>0,'errors'=>0,'deleted'=>0,'type'=>isset($info['type'])?$info['type']:'','btnmessage'=>isset($info['btnmessage'])?$info['btnmessage']:'none','pingmessage'=>isset($info['pingmessage'])?$info['pingmessage']:'no'];
+@file_put_contents($statsPath,json_encode($j,JSON_UNESCAPED_UNICODE));
 }
-?>
+if(!isset($j['total'])||$j['total']<count($userIds)){$j['total']=count($userIds)+($j['processed']??0);}
+return $j;
+};
+$writeStats=function($j)use($statsPath){
+@file_put_contents($statsPath,json_encode($j,JSON_UNESCAPED_UNICODE));
+};
+$stats=$readStats();
+$datatextbot=['text_usertest'=>'','text_support'=>'','text_help'=>'','text_sell'=>'','text_affiliates'=>'','text_Add_Balance'=>''];
+$datatextbotget=select("textbot","*",null,null,"fetchAll");
+if(is_array($datatextbotget)){
+foreach($datatextbotget as $row){
+if(isset($row['id_text'])&&array_key_exists($row['id_text'],$datatextbot)){$datatextbot[$row['id_text']]=$row['text']??'';}
+}
+}
+$cancelmessage=json_encode(['inline_keyboard'=>[[['text'=>"لغو عملیات",'callback_data'=>'cancel_sendmessage']]]],JSON_UNESCAPED_UNICODE);
+$btn=$info['btnmessage']??'none';
+$replyMarkup=null;
+if($btn==='buy'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>$datatextbot['text_sell'],'callback_data'=>'buy']]]],JSON_UNESCAPED_UNICODE);}
+elseif($btn==='start'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>"شروع",'callback_data'=>'start']]]],JSON_UNESCAPED_UNICODE);}
+elseif($btn==='usertestbtn'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>$datatextbot['text_usertest'],'callback_data'=>'usertestbtn']]]],JSON_UNESCAPED_UNICODE);}
+elseif($btn==='helpbtn'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>$datatextbot['text_help'],'callback_data'=>'helpbtn']]]],JSON_UNESCAPED_UNICODE);}
+elseif($btn==='affiliatesbtn'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>$datatextbot['text_affiliates'],'callback_data'=>'affiliatesbtn']]]],JSON_UNESCAPED_UNICODE);}
+elseif($btn==='addbalance'){$replyMarkup=json_encode(['inline_keyboard'=>[[['text'=>$datatextbot['text_Add_Balance'],'callback_data'=>'Add_Balance']]]],JSON_UNESCAPED_UNICODE);}
+if(count($userIds)===0){
+if(isset($info['id_admin'],$info['id_message'])){
+$ended=time();
+$duration=max(0,$ended-($stats['started_at']??$ended));
+$total=(int)($stats['total']??0);
+$ok=(int)($stats['ok']??0);
+$failed=(int)($stats['failed']??0);
+$blocked=(int)($stats['blocked']??0);
+$errors=(int)($stats['errors']??0);
+$deleted=(int)($stats['deleted']??0);
+$notBlocked=max(0,$total-$blocked);
+$done=max(0,($stats['processed']??0));
+$report="✅ عملیات ارسال همگانی پایان یافت.\n\n📊 گزارش نهایی:\n👥 کل کاربران: ".$total."\n✅ ارسال موفق: ".$ok."\n❌ ارسال ناموفق: ".$failed."\n⛔️ بلاک کرده‌اند: ".$blocked."\n✅ بلاک نکرده‌اند: ".$notBlocked."\n⚠️ خطاها (غیراز بلاک): ".$errors."\n🧹 حذف‌شده‌ها (بدون فاکتور و موجودی): ".$deleted."\n⏱ مدت زمان: ".$duration." ثانیه\n🧾 پردازش‌شده: ".$done."\n🕒 زمان پایان: ".date('Y/m/d H:i:s',$ended);
+@deletemessage($info['id_admin'],$info['id_message']);
+@sendmessage($info['id_admin'],$report,null,'HTML');
+}
+@unlink($infoPath);
+@unlink($usersPath);
+@unlink($statsPath);
+return;
+}
+$maxExec=(int)@ini_get('max_execution_time');
+if($maxExec<=0){$maxExec=30;}
+$softTimeLimit=max(10,min(55,$maxExec-4));
+$batchSize=300;
+$startTime=microtime(true);
+$processedNow=0;
+$sentNow=0;
+$failedNow=0;
+$blockedNow=0;
+$errorsNow=0;
+$deletedNow=0;
+$type=$info['type']??'sendmessage';
+$ping=($info['pingmessage']??'no')==='yes';
+$messageText=$info['message']??'';
+$take=min($batchSize,count($userIds));
+$batch=array_slice($userIds,0,$take);
+$remain=array_slice($userIds,$take);
+foreach($batch as $uid){
+if((microtime(true)-$startTime)>=$softTimeLimit){$remain=array_merge([$uid],array_slice($batch,$processedNow+1),$remain);break;}
+$processedNow++;
+$stats['processed']=($stats['processed']??0)+1;
+$resp=null;
+if($type==='unpinmessage'){
+$resp=@unpinmessage($uid);
+$sentNow++;
+$stats['ok']=($stats['ok']??0)+1;
+continue;
+}
+if($type==='forwardmessage'){
+$attempt=0;
+while(true){
+$resp=@forwardMessage($info['id_admin']??null,$messageText,$uid);
+if(is_array($resp)&&isset($resp['ok'])&&$resp['ok']){break;}
+if(is_array($resp)&&isset($resp['error_code'])&&$resp['error_code']==429&&isset($resp['parameters']['retry_after'])){@sleep((int)$resp['parameters']['retry_after']);$attempt++;if($attempt<2){continue;}}
+if(is_array($resp)&&isset($resp['error_code'])&&in_array((int)$resp['error_code'],[500,502,503,504],true)){@usleep(500000);$attempt++;if($attempt<2){continue;}}
+break;
+}
+if(is_array($resp)&&isset($resp['ok'])&&$resp['ok']){
+$sentNow++;
+$stats['ok']=($stats['ok']??0)+1;
+if($ping&&isset($resp['result']['message_id'])){@pinmessage($uid,$resp['result']['message_id']);}
+}else{
+$failedNow++;
+$stats['failed']=($stats['failed']??0)+1;
+$desc=is_array($resp)&&isset($resp['description'])?$resp['description']:'';
+if(stripos($desc,'Forbidden: bot was blocked by the user')!==false){
+$blockedNow++;
+$stats['blocked']=($stats['blocked']??0)+1;
+$invoicecount=select("invoice","*","id_user",$uid,"count");
+$userinfo=select("user","Balance","id",$uid,"select");
+if((int)$invoicecount===0&&isset($userinfo['Balance'])&&(float)$userinfo['Balance']==0.0){
+try{$stmt=$pdo->prepare("DELETE FROM user WHERE id=:id");$stmt->execute([':id'=>$uid]);$deletedNow++;$stats['deleted']=($stats['deleted']??0)+1;}catch(Exception $e){}
+}
+}else{$errorsNow++;$stats['errors']=($stats['errors']??0)+1;}
+}
+continue;
+}
+$attempt=0;
+while(true){
+if($btn==='none'){$resp=@sendmessage($uid,$messageText,null,'HTML');}
+else{$resp=@sendmessage($uid,$messageText,$replyMarkup,'HTML');}
+if(is_array($resp)&&isset($resp['ok'])&&$resp['ok']){break;}
+if(is_array($resp)&&isset($resp['error_code'])&&$resp['error_code']==429&&isset($resp['parameters']['retry_after'])){@sleep((int)$resp['parameters']['retry_after']);$attempt++;if($attempt<2){continue;}}
+if(is_array($resp)&&isset($resp['error_code'])&&in_array((int)$resp['error_code'],[500,502,503,504],true)){@usleep(500000);$attempt++;if($attempt<2){continue;}}
+break;
+}
+if(is_array($resp)&&isset($resp['ok'])&&$resp['ok']){
+$sentNow++;
+$stats['ok']=($stats['ok']??0)+1;
+if($ping&&isset($resp['result']['message_id'])){@pinmessage($uid,$resp['result']['message_id']);}
+}else{
+$failedNow++;
+$stats['failed']=($stats['failed']??0)+1;
+$desc=is_array($resp)&&isset($resp['description'])?$resp['description']:'';
+if(stripos($desc,'Forbidden: bot was blocked by the user')!==false){
+$blockedNow++;
+$stats['blocked']=($stats['blocked']??0)+1;
+$invoicecount=select("invoice","*","id_user",$uid,"count");
+$userinfo=select("user","Balance","id",$uid,"select");
+if((int)$invoicecount===0&&isset($userinfo['Balance'])&&(float)$userinfo['Balance']==0.0){
+try{$stmt=$pdo->prepare("DELETE FROM user WHERE id=:id");$stmt->execute([':id'=>$uid]);$deletedNow++;$stats['deleted']=($stats['deleted']??0)+1;}catch(Exception $e){}
+}
+}else{$errorsNow++;$stats['errors']=($stats['errors']??0)+1;}
+}
+}
+$writeStats($stats);
+$remainOut=[];
+foreach($remain as $id){$remainOut[]=['id'=>$id];}
+@file_put_contents($usersPath,json_encode($remainOut,JSON_UNESCAPED_UNICODE));
+$remainCount=count($remain);
+$total=(int)($stats['total']??0);
+$done=(int)($stats['processed']??0);
+$ok=(int)($stats['ok']??0);
+$failed=(int)($stats['failed']??0);
+$blocked=(int)($stats['blocked']??0);
+$errors=(int)($stats['errors']??0);
+$deleted=(int)($stats['deleted']??0);
+$progress="✏️ عملیات ارسال همگانی در حال انجام است...\n\n👥 کل: ".$total."\n🧾 پردازش‌شده: ".$done."\n⏳ باقی‌مانده: ".$remainCount."\n\n✅ موفق تا الان: ".$ok."\n❌ ناموفق تا الان: ".$failed."\n⛔️ بلاک تا الان: ".$blocked."\n⚠️ خطا تا الان: ".$errors."\n🧹 حذف‌شده‌ها: ".$deleted."\n\n🚀 این اجرا:\n🧾 پردازش: ".$processedNow."\n✅ موفق: ".$sentNow."\n❌ ناموفق: ".$failedNow."\n⛔️ بلاک: ".$blockedNow."\n⚠️ خطا: ".$errorsNow;
+if(isset($info['id_admin'],$info['id_message'])){@Editmessagetext($info['id_admin'],$info['id_message'],$progress,$cancelmessage);}

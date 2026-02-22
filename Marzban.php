@@ -170,8 +170,21 @@ function getusers($location,$status)
 
     $output = curl_exec($ch);
     curl_close($ch);
-    $data_useer = json_decode($output, true);
-    return $data_useer;
+    $data_user = json_decode($output, true);
+
+    if (!is_array($data_user)) {
+        return ['error' => 'Unable to decode panel response.'];
+    }
+
+    if (isset($data_user['error'])) {
+        return $data_user;
+    }
+
+    if (!isset($data_user['users'])) {
+        $data_user['users'] = [];
+    }
+
+    return $data_user;
 }
 #-----------------------------#
 function getinbounds($location)

@@ -1,21 +1,28 @@
 <?php
+#----------------[  admin section  ]------------------#
+$guardHelperPath = __DIR__ . '/guard.php';
+if (is_file($guardHelperPath)) {
+    require_once $guardHelperPath;
+}
 $textadmin = ["panel", "/panel", $textbotlang['Admin']['textpaneladmin']];
-$text_panel_admin_login_template = "💎 | Version Debug Bot: 3.9
-📌 | Version Debug Mini App: 1.1
-
-<blockquote>🔹 | این ربات کاملاً رایگان است و توسط توسعه‌دهنده میرزا عرضه شده و توسط Mmd | Amir دیباگ شده است.</blockquote>
-
-<blockquote><a href=\"https://github.com/ishantia/mirza_pro\" style=\"color:#1e88ff;\">گیت هاب دیباگ کننده</a></blockquote>
-
-<blockquote>🔹 | هرگونه فروش یا دریافت وجه بابت این ربات تخلف محسوب می‌شود.</blockquote>
-
-<blockquote>🔹 | در صورت مشاهدهٔ فروش یا دریافت وجه، لطفاً وجه خود را پیگیری کرده و بازپس‌گیری نمایید.</blockquote>
-";
-
-if (!in_array($from_id, $admin_ids))
-    return;
-
-
+$text_panel_admin_login_base64_parts = [
+    '8J+SjiB8IFZlcnNpb24gQm90OiA1LjEwLjc3ICAK8J+TjCB8IFZlcnNpb24gTWluaSBBcHA6IDAuMS4x',
+    'CjxibG9ja3F1b3RlPvCflLkgfCDYp9uM2YYg2LHYqNin2Kog2qnYp9mF2YTYp9mLINix2KfbjNqv2KfZ',
+    'hiDYp9iz2Kog2Ygg2KrZiNiz2Lcg2KrZiNiz2LnZh+KAjNiv2YfZhtiv2Ycg2YXbjNix2LLYpyDYudix',
+    '2LbZhyDYtNiv2Ycg2YggbW1kOGFtaXIg2K/bjNio2KfaryDYtNiv2Ycg2KfYs9iqLjwvYmxvY2txdW90',
+    'ZT4KCjxibG9ja3F1b3RlPvCflLkgfCDZh9ix2q/ZiNmG2Ycg2YHYsdmI2LQg24zYpyDYr9ix24zYp9mB',
+    '2Kog2YjYrNmHINio2KfYqNiqINin24zZhiDYsdio2KfYqiDYqtiu2YTZgSDZhdit2LPZiNioINmF24zi',
+    'gIzYtNmI2K8uPC9ibG9ja3F1b3RlPgoKPGJsb2NrcXVvdGU+8J+UuSB8INiv2LEg2LXZiNix2Kog2YXY',
+    'tNin2YfYr9mH2ZQg2YHYsdmI2LQg24zYpyDYr9ix24zYp9mB2Kog2YjYrNmH2Iwg2YTYt9mB2KfZiyDZ',
+    'iNis2Ycg2K7ZiNivINix2Kcg2b7bjNqv24zYsduMINqp2LHYr9mHINmIINio2KfYstm+2LPigIzar9uM',
+    '2LHbjCDZhtmF2KfbjNuM2K8uPC9ibG9ja3F1b3RlPgoKPGJsb2NrcXVvdGU+8J+QniB8INin2q/YsSDY',
+    'r9ixINi52YXZhNqp2LHYryDYsdio2KfYqiDYqNinINio2KfaryDbjNinINmF2LTaqdmE24wg2YXZiNin',
+    '2KzZhyDYtNiv24zYr9iMINin2LIg2LfYsduM2YIg2K/aqdmF2YfZlCA8Yj7wn5OsINqv2LLYp9ix2LQg',
+    '2LHYqNin2Ko8L2I+INiv2LEg2b7ZhtmEINin2K/ZhduM2YYg2KjYpyDZhdinINiv2LEg2KfYsdiq2KjY',
+    'p9i3INio2KfYtNuM2K8uPC9ibG9ja3F1b3RlPg==',
+];
+$text_panel_admin_login_base64 = implode('', $text_panel_admin_login_base64_parts);
+$text_panel_admin_login_template = base64_decode($text_panel_admin_login_base64, true) ?: '';
 
 function normalizeXuiSingleSubscriptionBaseUrl($rawLink)
 {
@@ -158,6 +165,518 @@ function hasLikelyXuiSubscriptionId($url)
     return false;
 }
 
+function ensureGuardPanelColumnsReady(PDO $pdo)
+{
+    $requiredColumns = [
+        'api_key' => "VARCHAR(500)",
+        'guard_service_ids' => "TEXT",
+        'guard_note' => "TEXT",
+        'guard_auto_delete_days' => "INT(11)",
+        'guard_auto_renewals' => "TEXT",
+    ];
+
+    if (function_exists('ensureMarzbanGuardFieldsMigrated')) {
+        ensureMarzbanGuardFieldsMigrated();
+    } else {
+        foreach ($requiredColumns as $column => $datatype) {
+            addFieldToTable("marzban_panel", $column, null, $datatype);
+        }
+    }
+
+    $placeholders = implode(',', array_fill(0, count($requiredColumns), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'marzban_panel' AND COLUMN_NAME IN ($placeholders)"
+    );
+    $stmt->execute(array_keys($requiredColumns));
+    $existingColumns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    $missingColumns = array_diff(array_keys($requiredColumns), $existingColumns);
+
+    return [
+        'status' => empty($missingColumns),
+        'missing' => array_values($missingColumns),
+    ];
+}
+
+function guardFormatServiceList(array $services)
+{
+    if (empty($services)) {
+        return "• لیست سرویس خالی است.";
+    }
+    $lines = [];
+    foreach ($services as $service) {
+        $serviceData = is_array($service) ? $service : [];
+        $id = isset($serviceData['id']) ? intval($serviceData['id']) : 'نامشخص';
+        $title = guardServiceLabel($serviceData);
+        $usageRate = null;
+        foreach (['usage_rate', 'usageRate'] as $rateKey) {
+            if (isset($serviceData[$rateKey]) && is_numeric($serviceData[$rateKey])) {
+                $usageRate = $serviceData[$rateKey];
+                break;
+            }
+        }
+        $rateLabel = $usageRate !== null ? " [{$usageRate}x]" : '';
+        $lines[] = "• id={$id} | {$title}{$rateLabel}";
+    }
+    return implode("\n", $lines);
+}
+
+function guardExtractUsageRateValue(array $service)
+{
+    foreach (['usage_rate', 'usageRate'] as $rateKey) {
+        if (isset($service[$rateKey]) && is_numeric($service[$rateKey])) {
+            return floatval($service[$rateKey]);
+        }
+    }
+    return null;
+}
+
+function guardFormatUsageRateLabel($rate)
+{
+    $value = is_numeric($rate) ? floatval($rate) : 1.0;
+    $precision = (floor($value) == $value) ? 1 : 2;
+    $formatted = number_format($value, $precision, '.', '');
+    $formatted = rtrim(rtrim($formatted, '0'), '.');
+    if (strpos($formatted, '.') === false) {
+        $formatted .= '.0';
+    }
+    return $formatted;
+}
+
+function syncSuiInboundsWithProxies($panelId)
+{
+    if (empty($panelId)) {
+        return;
+    }
+
+    $panelData = select("marzban_panel", "id,type,proxies,inbounds", "id", $panelId, "select");
+    if (!is_array($panelData) || ($panelData['type'] ?? '') !== 's_ui') {
+        return;
+    }
+
+    $proxies = $panelData['proxies'] ?? null;
+    if ($proxies === null || $proxies === '') {
+        return;
+    }
+
+    $inbounds = $panelData['inbounds'] ?? null;
+    if ($inbounds === null || $inbounds === '' || $inbounds !== $proxies) {
+        update("marzban_panel", "inbounds", $proxies, "id", $panelData['id']);
+    }
+}
+
+function guardBuildServiceButtonLabel(array $service, $isSelected)
+{
+    $label = guardServiceLabel($service);
+    $rateLabel = guardFormatUsageRateLabel(guardExtractUsageRateValue($service));
+    $statusIcon = $isSelected ? '✅' : '❌';
+    return "[{$rateLabel}x] {$label} {$statusIcon}";
+}
+
+function guardBuildServiceSummaryLabel(array $service)
+{
+    $label = guardServiceLabel($service);
+    $rateLabel = guardFormatUsageRateLabel(guardExtractUsageRateValue($service));
+    return "{$label} [{$rateLabel}x]";
+}
+
+function guardNormalizeSelectedServiceIds($selectedIds, array $availableIds, $fallbackToAll = false)
+{
+    $normalized = [];
+    $hasAll = false;
+    if (is_array($selectedIds)) {
+        foreach ($selectedIds as $id) {
+            if ($id === 'all' || $id === '0' || $id === 0) {
+                $hasAll = true;
+                continue;
+            }
+            if (is_numeric($id)) {
+                $normalized[] = intval($id);
+            }
+        }
+    }
+    $normalized = array_values(array_intersect(array_unique($normalized), $availableIds));
+    if ($hasAll) {
+        return $availableIds;
+    }
+    if ($fallbackToAll && empty($normalized)) {
+        return $availableIds;
+    }
+    return $normalized;
+}
+
+function guardBuildServiceSelectionSummary(array $services, array $selectedIds, $selectAll = false)
+{
+    $availableIds = guardExtractServiceIdsFromList($services);
+    $selectedIds = guardNormalizeSelectedServiceIds($selectedIds, $availableIds, false);
+    if ($selectAll || (!empty($availableIds) && count($selectedIds) === count($availableIds))) {
+        return "همه سرویس‌ها";
+    }
+    $labels = [];
+    foreach ($services as $service) {
+        $id = isset($service['id']) ? intval($service['id']) : 0;
+        if ($id !== 0 && in_array($id, $selectedIds, true)) {
+            $labels[] = guardBuildServiceSummaryLabel($service);
+        }
+    }
+    return !empty($labels) ? implode(' ، ', $labels) : "هیچ سرویسی انتخاب نشده است.";
+}
+
+function guardBuildServiceSelectionMessage(array $services, array $selectedIds, $selectAll = false)
+{
+    $baseLines = [
+        "✨ انتخاب سرویس‌های قابل ساخت توسط ربات",
+        "لطفاً مشخص کنید ربات مجاز به ساخت کدام سرویس‌ها باشد.",
+        "پس از اعمال تغییرات، دکمه «ذخیره و اعمال» را بزنید. برای خروج بدون ثبت از دکمه اختصاصی استفاده کنید.",
+        "",
+        "📌 توجه:",
+        "حداقل یک سرویس باید انتخاب شود.",
+    ];
+    $allState = $selectAll ? "✅ همه سرویس‌ها فعال است" : "❌ همه سرویس‌ها غیرفعال است";
+    $summary = guardBuildServiceSelectionSummary($services, $selectedIds, $selectAll);
+    return implode("\n", $baseLines) . "\n\nحالت سرویس‌ها: {$allState}\n\nانتخاب فعلی:\n{$summary}";
+}
+
+function guardBuildServiceSelectionKeyboard(array $services, array $selectedIds, $mode, $selectAll = false)
+{
+    $availableIds = guardExtractServiceIdsFromList($services);
+    $selectedIds = guardNormalizeSelectedServiceIds($selectedIds, $availableIds, false);
+    $buttons = [];
+    foreach ($services as $service) {
+        if (!isset($service['id'])) {
+            continue;
+        }
+        $id = intval($service['id']);
+        $isSelected = $selectAll || in_array($id, $selectedIds, true);
+        $buttons[] = [
+            'text' => guardBuildServiceButtonLabel($service, $isSelected),
+            'callback_data' => "guardservice:{$mode}:toggle:{$id}",
+        ];
+    }
+    $keyboard = ['inline_keyboard' => []];
+    while (count($buttons) > 0) {
+        $keyboard['inline_keyboard'][] = array_splice($buttons, 0, 2);
+    }
+    $keyboard['inline_keyboard'][] = [
+        [
+            'text' => $selectAll ? "✅ همه سرویس‌ها" : "❌ همه سرویس‌ها",
+            'callback_data' => "guardservice:{$mode}:toggle_all",
+        ],
+    ];
+    $keyboard['inline_keyboard'][] = [
+        ['text' => "💾 ذخیره و اعمال", 'callback_data' => "guardservice:{$mode}:save"],
+    ];
+    $keyboard['inline_keyboard'][] = [
+        ['text' => "↩️ خروج بدون ذخیره", 'callback_data' => "guardservice:{$mode}:close"],
+    ];
+    return json_encode($keyboard, JSON_UNESCAPED_UNICODE);
+}
+
+function guardEncodeServiceSelectionForStorage(array $selectedIds, array $availableIds, $selectAll = false)
+{
+    $selectedIds = guardNormalizeSelectedServiceIds($selectedIds, $availableIds, false);
+    $allSelected = $selectAll || (!empty($availableIds) && count(array_diff($availableIds, $selectedIds)) === 0);
+    if ($allSelected) {
+        return "0";
+    }
+    return json_encode(array_values(array_unique($selectedIds)));
+}
+
+function guardExtractPanelNameFromState(array $state)
+{
+    foreach (['panel', 'panel_name', 'namepanel'] as $key) {
+        if (!empty($state[$key]) && is_string($state[$key])) {
+            return trim($state[$key]);
+        }
+    }
+    return !empty($state['guard_service_selection']['panel'])
+        ? trim((string) $state['guard_service_selection']['panel'])
+        : null;
+}
+
+function guardResolveUserPanelName(array $user)
+{
+    if (!isset($user['Processing_value'])) {
+        return null;
+    }
+    $raw = $user['Processing_value'];
+    $decoded = json_decode($raw, true);
+    if (is_array($decoded)) {
+        foreach (['panel', 'panel_name', 'namepanel'] as $key) {
+            if (!empty($decoded[$key]) && is_string($decoded[$key])) {
+                return trim($decoded[$key]);
+            }
+        }
+        if (!empty($decoded['guard_service_selection']['panel'])) {
+            return trim((string) $decoded['guard_service_selection']['panel']);
+        }
+    }
+
+    $trimmed = trim((string) $raw);
+    return $trimmed === '' || $trimmed === '0' ? null : $trimmed;
+}
+
+function guardRestorePanelSelection($userId, array $state)
+{
+    $panelName = guardExtractPanelNameFromState($state);
+    if (!empty($state['mode']) && $state['mode'] === 'edit' && $panelName !== null) {
+        update("user", "Processing_value", $panelName, "id", $userId);
+    }
+}
+
+function guardFormatAutoRenewalsForSummary(array $entries)
+{
+    if (empty($entries)) {
+        return 'خاموش';
+    }
+    $formatted = [];
+    foreach ($entries as $entry) {
+        if ($entry === 0 || $entry === '0') {
+            $formatted[] = 'نامحدود (0)';
+            continue;
+        }
+        if (!is_array($entry)) {
+            continue;
+        }
+        $expireDays = isset($entry['expire_days']) ? intval($entry['expire_days']) : 0;
+        $usageGb = isset($entry['usage_gb']) ? floatval($entry['usage_gb']) : 0;
+        $usageGbFormatted = rtrim(rtrim(number_format($usageGb, 2, '.', ''), '0'), '.');
+        if ($usageGbFormatted === '') {
+            $usageGbFormatted = '0';
+        }
+        $resetUsage = (!empty($entry['reset_usage']) || (!empty($entry['reset']) && $entry['reset'] === true)) ? '1' : '0';
+        $formatted[] = "{$expireDays},{$usageGbFormatted},{$resetUsage}";
+    }
+    return !empty($formatted) ? implode(' | ', $formatted) : 'خاموش';
+}
+
+function guardExtractSavedGuardSettings(array $panel)
+{
+    return [
+        'note' => $panel['guard_note'] ?? '',
+        'auto_delete_days' => max(0, intval($panel['guard_auto_delete_days'] ?? 0)),
+        'auto_renewals' => guardDecodeAutoRenewalsConfig($panel['guard_auto_renewals'] ?? []),
+    ];
+}
+
+function guardBuildGuardSettingsState(array $panel, $messageId = null)
+{
+    $savedSettings = guardExtractSavedGuardSettings($panel);
+
+    return [
+        'panel' => $panel['name_panel'] ?? null,
+        'note' => $savedSettings['note'],
+        'auto_delete_days' => $savedSettings['auto_delete_days'],
+        'auto_renewals' => $savedSettings['auto_renewals'],
+        'saved' => $savedSettings,
+        'pending_changes' => false,
+        'message_id' => $messageId,
+    ];
+}
+
+function guardPersistGuardSettingsState($fromId, array $state)
+{
+    update("user", "Processing_value_one", json_encode($state, JSON_UNESCAPED_UNICODE), "id", $fromId);
+}
+
+function guardLoadGuardSettingsState(array $user, array $panel, $messageId = null)
+{
+    $state = [];
+    if (isset($user['Processing_value_one'])) {
+        $decoded = json_decode($user['Processing_value_one'], true);
+        if (is_array($decoded)) {
+            $state = $decoded;
+        }
+    }
+    if (!is_array($state) || empty($state)) {
+        $userId = $user['id'] ?? null;
+        if ($userId !== null) {
+            $freshUser = select("user", "Processing_value_one", "id", $userId, "select");
+            if (is_array($freshUser) && isset($freshUser['Processing_value_one'])) {
+                $decoded = json_decode($freshUser['Processing_value_one'], true);
+                if (is_array($decoded)) {
+                    $state = $decoded;
+                }
+            }
+        }
+    }
+
+    $panelName = $panel['name_panel'] ?? null;
+    $savedFromPanel = guardExtractSavedGuardSettings($panel);
+    $hasPendingChanges = !empty($state['pending_changes']);
+
+    if (!is_array($state) || ($state['panel'] ?? null) !== $panelName) {
+        $state = guardBuildGuardSettingsState($panel, $messageId);
+    } else {
+        $state['panel'] = $panelName;
+        $state['saved'] = guardExtractSavedGuardSettings($panel);
+        $state['message_id'] = $messageId ?? ($state['message_id'] ?? null);
+
+        if ($hasPendingChanges) {
+            $state['note'] = array_key_exists('note', $state) ? (string) $state['note'] : $savedFromPanel['note'];
+            $state['auto_delete_days'] = max(0, intval($state['auto_delete_days'] ?? $savedFromPanel['auto_delete_days']));
+            $state['auto_renewals'] = guardDecodeAutoRenewalsConfig($state['auto_renewals'] ?? $savedFromPanel['auto_renewals']);
+            $state['pending_changes'] = true;
+        } else {
+            $state['note'] = $savedFromPanel['note'];
+            $state['auto_delete_days'] = $savedFromPanel['auto_delete_days'];
+            $state['auto_renewals'] = $savedFromPanel['auto_renewals'];
+            $state['pending_changes'] = false;
+        }
+    }
+
+    return $state;
+}
+
+function guardBuildGuardSettingsMessage(array $state, $includeSavedNotice = false)
+{
+    $note = trim((string) ($state['note'] ?? ''));
+    $safeNote = $note === '' ? '-' : htmlspecialchars($note, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $autoDelete = max(0, intval($state['auto_delete_days'] ?? 0));
+    $autoRenewals = guardFormatAutoRenewalsForSummary($state['auto_renewals'] ?? []);
+    $lines = [
+        "🎛️ تنظیمات سرویس",
+        "",
+        "📝 توضیحات : {$safeNote}",
+        "🗑 حذف خودکار : {$autoDelete}",
+        "👤 تمدید خودکار : {$autoRenewals}",
+        "",
+    ];
+    if (!empty($state['pending_changes'])) {
+        $lines[] = "💾 تغییرات ذخیره نشده است. برای ثبت، دکمه «✅ ذخیره» را بزنید.";
+        $lines[] = "";
+    }
+    if ($includeSavedNotice) {
+        $lines[] = "✅ تنظیمات سرویس Guard ذخیره شد.";
+        $lines[] = "";
+    }
+    $lines[] = "برای ویرایش روی هر گزینه بزنید 👇";
+    return implode("\n", $lines);
+}
+
+function guardBuildGuardSettingsKeyboard()
+{
+    return json_encode([
+        'inline_keyboard' => [
+            [
+                ['text' => "🔖 | ویرایش توضیحات", 'callback_data' => "guardsettings:note"],
+            ],
+            [
+                ['text' => "🗑️ | ویرایش حذف خودکار", 'callback_data' => "guardsettings:auto_delete"],
+            ],
+            [
+                ['text' => "🙎🏻‍♂️ | ویرایش تمدید خودکار کاربر", 'callback_data' => "guardsettings:auto_renew"],
+            ],
+            [
+                ['text' => "✅ ذخیره", 'callback_data' => "guardsettings:save"],
+            ],
+            [
+                ['text' => "❌ | بستن", 'callback_data' => "guardsettings:back"],
+            ],
+        ],
+    ], JSON_UNESCAPED_UNICODE);
+}
+
+function guardRenderGuardSettingsSummary($chatId, array $state, $includeSavedNotice = false)
+{
+    $keyboard = guardBuildGuardSettingsKeyboard();
+    $messageText = guardBuildGuardSettingsMessage($state, $includeSavedNotice);
+    $messageId = $state['message_id'] ?? null;
+    if ($messageId !== null) {
+        deletemessage($chatId, $messageId);
+    }
+    $response = sendmessage($chatId, $messageText, $keyboard, 'HTML');
+    return $response['result']['message_id'] ?? $messageId;
+}
+
+function guardRenderGuardSettingsPrompt($chatId, array $state, $promptText)
+{
+    $keyboard = guardBuildGuardSettingsKeyboard();
+    $messageId = $state['message_id'] ?? null;
+    if ($messageId !== null) {
+        deletemessage($chatId, $messageId);
+    }
+    $response = sendmessage($chatId, $promptText, $keyboard, 'HTML');
+    return $response['result']['message_id'] ?? $messageId;
+}
+
+function guardParseServiceSelectionInput($input, array $services)
+{
+    $input = trim((string) $input);
+    $availableIds = guardExtractServiceIdsFromList($services);
+    if (empty($availableIds)) {
+        return [
+            'status' => false,
+            'msg' => 'لیست سرویس خالی است.'
+        ];
+    }
+    if ($input === '') {
+        return [
+            'status' => false,
+            'msg' => 'ورودی خالی است.'
+        ];
+    }
+    $lower = strtolower($input);
+    if (in_array($lower, ['0', 'all', 'skip', 'none'], true)) {
+        return [
+            'status' => true,
+            'service_ids' => $availableIds
+        ];
+    }
+    $parts = preg_split('/\s*,\s*/', $input);
+    $selected = [];
+    foreach ($parts as $part) {
+        if ($part === '') {
+            continue;
+        }
+        if (!ctype_digit($part)) {
+            return [
+                'status' => false,
+                'msg' => 'شناسه سرویس نامعتبر است.'
+            ];
+        }
+        $id = intval($part);
+        if (!in_array($id, $availableIds, true)) {
+            return [
+                'status' => false,
+                'msg' => "سرویس {$id} در لیست موجود نیست."
+            ];
+        }
+        $selected[] = $id;
+    }
+    $selected = array_values(array_unique($selected));
+    if (empty($selected)) {
+        return [
+            'status' => false,
+            'msg' => 'هیچ سرویس معتبری ارسال نشد.'
+        ];
+    }
+
+    return [
+        'status' => true,
+        'service_ids' => $selected
+    ];
+}
+
+function guardFormatConnectionResult(array $result)
+{
+    global $textbotlang;
+    $statusCode = $result['response']['status'] ?? null;
+    if (!empty($result['status'])) {
+        $adminName = guardExtractAdminName($result['data'] ?? []);
+        $adminLabel = $adminName !== '' ? " ({$adminName})" : '';
+        return trim(($textbotlang['Admin']['managepanel']['guard']['connection_ok'] ?? "✅ اتصال برقرار است") . $adminLabel);
+    }
+    if (in_array($statusCode, [401, 403], true)) {
+        return "❌ عدم دسترسی (401/403) → API Key اشتباه";
+    }
+    $errorMsg = $result['msg'] ?? '';
+    $prefix = $textbotlang['Admin']['managepanel']['guard']['connection_error'] ?? "❌ خطای اتصال";
+    if ($errorMsg !== '') {
+        return "{$prefix} → {$errorMsg}";
+    }
+    return $prefix;
+}
+
 function getPanelStateFromConfigFile($configPath)
 {
     if (!is_string($configPath) || $configPath === '' || !is_readable($configPath)) {
@@ -264,61 +783,23 @@ function updatePanelStateInConfigFile($configPath, $state)
     return true;
 }
 
-function buildCronJobsKeyboard(): string
-{
-    if (!function_exists('getCronJobDefinitions') || !function_exists('loadCronSchedules') || !function_exists('describeCronSchedule')) {
-        return json_encode(['inline_keyboard' => []]);
-    }
-
-    $definitions = getCronJobDefinitions();
-    $schedules = loadCronSchedules();
-    $keyboard = ['inline_keyboard' => []];
-
-    foreach ($definitions as $key => $definition) {
-        if (empty($definition['admin_label']) || empty($definition['script'])) {
-            continue;
-        }
-        $schedule = $schedules[$key] ?? $definition['default'];
-        $keyboard['inline_keyboard'][] = [
-            ['text' => '⚙️ تنظیمات', 'callback_data' => "cronjob_config-{$key}"],
-            ['text' => describeCronSchedule($schedule), 'callback_data' => 'cronjob_display'],
-            ['text' => $definition['admin_label'], 'callback_data' => 'cronjob_display'],
-        ];
-    }
-
-    $keyboard['inline_keyboard'][] = [
-        ['text' => '🔙 بازگشت به منوی وضعیت', 'callback_data' => 'admin'],
-    ];
-
-    return json_encode($keyboard, JSON_UNESCAPED_UNICODE);
-}
-
-function getCronUnitTitle(string $unit): string
-{
-    $labels = [
-        'minute' => 'دقیقه',
-        'hour' => 'ساعت',
-        'day' => 'روز',
-        'disabled' => 'غیرفعال',
-    ];
-
-    return $labels[$unit] ?? $labels['minute'];
-}
-
 if (!in_array($from_id, $admin_ids))
     return;
 
-$users_ids = select('user', 'id', null, null, 'FETCH_COLUMN');
-if (!is_array($users_ids)) {
-    $users_ids = [];
-}
-
 $domainhostsEscaped = htmlspecialchars($domainhosts, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-$cronInstructionBlock = '';
-if (function_exists('buildCronInstructionDetails')) {
-    $cronInstructionBlock = buildCronInstructionDetails($domainhostsEscaped);
-} else {
-    $cronInstructionBlock = <<<CRONHTML
+
+$miniAppInstructionText = <<<HTML
+📌 آموزش فعالسازی مینی اپ در ربات BotFather
+
+/mybots > Select Bot > Bot Setting >  Configure Mini App > Enable Mini App  > Edit Mini App URL
+
+مراحل بالا را طی کنید سپس آدرس زیر را ارسال نمایید :
+
+<code>https://{$domainhostsEscaped}/app/</code>
+
+➖➖➖➖➖➖➖➖➖➖➖➖
+⚙️ تنظیم کرون‌جاب‌ها در هاست
+
 <b>🕒 بررسی وضعیت روزانه — هر 15 دقیقه</b>
 <code>curl https://{$domainhostsEscaped}/cronbot/statusday.php</code>
 
@@ -343,7 +824,7 @@ if (function_exists('buildCronInstructionDetails')) {
 <b>🇮🇷 بررسی وضعیت پرداخت ایران‌پی — هر 1 دقیقه</b>
 <code>curl https://{$domainhostsEscaped}/cronbot/iranpay1.php</code>
 
-<b>🗂 تهیه نسخه‌ی پشتیبان (Backup) — هر 5 ساعت</b>
+<b>🗄 تهیه نسخه‌ی پشتیبان (Backup) — هر 5 ساعت</b>
 <code>curl https://{$domainhostsEscaped}/cronbot/backupbot.php</code>
 
 <b>🎁 ارسال هدایا (Gift System) — هر 2 دقیقه</b>
@@ -366,30 +847,6 @@ if (function_exists('buildCronInstructionDetails')) {
 
 <b>💳 انجام تراکنش‌های کارت‌به‌کارت — هر 1 دقیقه</b>
 <code>curl https://{$domainhostsEscaped}/cronbot/croncard.php</code>
-CRONHTML;
-}
-
-$miniAppInstructionText = <<<HTML
-📌 آموزش فعالسازی مینی اپ در ربات BotFather
-
-/mybots > Select Bot > Bot Setting >  Configure Mini App > Enable Mini App  > Edit Mini App URL
-
-مراحل بالا را طی کنید سپس آدرس زیر را ارسال نمایید :
-
-<code>https://{$domainhostsEscaped}/app/</code>
-
-➖➖➖➖➖➖➖➖➖➖➖➖
-⚙️ تنظیم کرون‌جاب‌ها در هاست
-
-
-<b>⏱ تنها کرون‌جاب موردنیاز به صورت
-
-*/1
-
- یعنی هر 1 دقیقه باید تنظیم کنید
-</b>
-
-<code>curl https://{$domainhostsEscaped}/cron/cron.php</code>
 HTML;
 
 if (in_array($text, $textadmin) || $datain == "admin") {
@@ -405,7 +862,14 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     sendmessage($from_id, $text_admin, $keyboardadmin, 'HTML');
     $miniAppInstructionHidden = isset($user['hide_mini_app_instruction']) ? (string) $user['hide_mini_app_instruction'] : '0';
     if ($miniAppInstructionHidden !== '1') {
-        sendmessage($from_id, $miniAppInstructionText, null, 'HTML');
+        $miniAppInstructionKeyboard = json_encode([
+            'inline_keyboard' => [
+                [
+                    ['text' => 'دیگر نمایش نده ⛓️‍💥', 'callback_data' => 'hide_mini_app_instruction'],
+                ],
+            ],
+        ]);
+        sendmessage($from_id, $miniAppInstructionText, $miniAppInstructionKeyboard, 'HTML');
     }
 } elseif ($text == $textbotlang['Admin']['backadmin']) {
     if ($buyreport == "0" || $otherservice == "0" || $otherreport == "0" || $paymentreports == "0" || $reporttest == "0" || $errorreport == "0") {
@@ -1341,6 +1805,15 @@ $paycount
         savedata("save", "password", "null");
         return;
     }
+    if ($userdata['type'] == "guard") {
+        $defaultGuardUrl = guardGetBaseUrl();
+        savedata("save", "url_panel", $defaultGuardUrl);
+        savedata("save", "username", "null");
+        savedata("save", "password", "null");
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['getapikey'], $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        return;
+    }
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['addpanelurl'], $backadmin, 'HTML');
     step('add_link_panel', $from_id);
 } elseif ($user['step'] == "add_link_panel") {
@@ -1348,13 +1821,19 @@ $paycount
         sendmessage($from_id, $textbotlang['Admin']['managepanel']['Invalid-domain'], $backadmin, 'HTML');
         return;
     }
-    savedata("save", "url_panel", $text);
+    $normalizedPanelUrl = rtrim($text, '/');
+    savedata("save", "url_panel", $normalizedPanelUrl);
     $userdata = json_decode($user['Processing_value'], true);
     if ($userdata['type'] == "hiddify") {
         sendmessage($from_id, $textbotlang['Admin']['managepanel']['getlimitedpanel'], $backadmin, 'HTML');
         step('getlimitedpanel', $from_id);
         savedata("save", "username", "null");
         savedata("save", "password", "null");
+        return;
+    } elseif ($userdata['type'] == "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['getapikey'], $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        savedata("save", "username", "null");
         return;
     } elseif ($userdata['type'] == "s_ui" || $userdata['type'] == "WGDashboard") {
         sendmessage($from_id, "📌 توکن را ارسال نمایید", $backadmin, 'HTML');
@@ -1368,6 +1847,430 @@ $paycount
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['getpassword'], $backadmin, 'HTML');
     step('add_password_panel', $from_id);
     savedata("save", "username", $text);
+} elseif ($user['step'] == "add_guard_api_key") {
+    $apiKey = trim($text);
+    if ($apiKey === '') {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    $userdata = json_decode($user['Processing_value'], true);
+    $guardBaseUrl = guardGetBaseUrl(isset($userdata['url_panel']) ? $userdata['url_panel'] : '');
+    $connectionResult = guardTestConnection($guardBaseUrl, $apiKey);
+    if ($connectionResult['status'] === false) {
+        $errorMessage = $connectionResult['msg'] ?? $textbotlang['Admin']['managepanel']['invalidapikey'];
+        $feedback = "❌ اتصال به گارد ناموفق بود:\n{$errorMessage}\n\n📌 لطفاً API Key را بررسی کرده و مجدداً ارسال کنید.";
+        sendmessage($from_id, $feedback, $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        return;
+    }
+    $panelConfig = $connectionResult['panel_config'] ?? [
+        'status' => true,
+        'panel' => [
+            'type' => 'guard',
+            'url_panel' => $guardBaseUrl,
+            'api_key' => $apiKey,
+            'password_panel' => null,
+        ],
+        'api_key' => $apiKey,
+    ];
+    savedata("save", "api_key", $apiKey);
+    savedata("save", "url_panel", $guardBaseUrl);
+    $servicesResponse = guardGetServices($panelConfig);
+    if ($servicesResponse['status'] === false) {
+        $errorMessage = $servicesResponse['msg'] ?? 'خطای ناشناخته';
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, $errorMessage);
+        sendmessage($from_id, $failText, $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        return;
+    }
+    $services = $servicesResponse['services'];
+    if (!is_array($services) || empty($services)) {
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, 'لیست سرویس Guard خالی است.');
+        sendmessage($from_id, $failText, $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        return;
+    }
+    $availableIds = guardExtractServiceIdsFromList($services);
+    if (empty($availableIds)) {
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, 'شناسه معتبر برای سرویس‌ها یافت نشد.');
+        sendmessage($from_id, $failText, $backadmin, 'HTML');
+        step('add_guard_api_key', $from_id);
+        return;
+    }
+    $statusText = guardFormatConnectionResult($connectionResult);
+    if ($statusText !== '') {
+        sendmessage($from_id, "✅ اتصال به گارد برقرار شد.\n{$statusText}", $backadmin, 'HTML');
+    }
+    $selectionState = [
+        'mode' => 'create',
+        'panel' => null,
+        'services' => $services,
+        'selected_ids' => guardNormalizeSelectedServiceIds($availableIds, $availableIds, true),
+        'select_all' => true,
+        'manual_selected_ids' => [],
+    ];
+    savedata("save", "guard_services_cache", $services);
+    savedata("save", "guard_service_selection", $selectionState);
+    $message = guardBuildServiceSelectionMessage($services, $selectionState['selected_ids'], true);
+    $keyboard = guardBuildServiceSelectionKeyboard($services, $selectionState['selected_ids'], 'create', true);
+    $messageResponse = sendmessage($from_id, $message, $keyboard, 'HTML');
+    if (isset($messageResponse['result']['message_id'])) {
+        $selectionState['message_id'] = $messageResponse['result']['message_id'];
+        savedata("save", "guard_service_selection", $selectionState);
+    }
+    step('guard_service_selection_new', $from_id);
+} elseif (preg_match('/^guardservice:(create|edit):(toggle|toggle_all|save|done|back|close)(?::(\d+))?$/', $datain, $matches)) {
+    $mode = $matches[1];
+    $action = $matches[2];
+    $serviceId = isset($matches[3]) ? intval($matches[3]) : null;
+    $userdata = json_decode($user['Processing_value'], true);
+    $state = isset($userdata['guard_service_selection']) ? $userdata['guard_service_selection'] : null;
+    if (!is_array($state) || ($state['mode'] ?? null) !== $mode || empty($state['services'])) {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'اطلاعات سرویس Guard در دسترس نیست. لطفاً دوباره تلاش کنید.',
+            'show_alert' => true,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    $services = is_array($state['services']) ? $state['services'] : [];
+    $availableIds = guardExtractServiceIdsFromList($services);
+    if (empty($services) || empty($availableIds)) {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'لیست سرویس Guard در دسترس نیست.',
+            'show_alert' => true,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    $selectAll = !empty($state['select_all']);
+    $selectedIds = guardNormalizeSelectedServiceIds($state['selected_ids'] ?? [], $availableIds, false);
+    if ($selectAll) {
+        $selectedIds = $availableIds;
+    }
+    if (!empty($message_id)) {
+        $state['message_id'] = $message_id;
+        savedata("save", "guard_service_selection", $state);
+    }
+    if ($action === 'toggle') {
+        if ($selectAll) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => 'برای تغییر انتخاب‌ها، ابتدا حالت همه سرویس‌ها را خاموش کنید.',
+                'show_alert' => true,
+                'cache_time' => 3,
+            ]);
+            return;
+        }
+        if ($serviceId === null || !in_array($serviceId, $availableIds, true)) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => 'شناسه سرویس نامعتبر است.',
+                'show_alert' => true,
+                'cache_time' => 3,
+            ]);
+            return;
+        }
+        if (in_array($serviceId, $selectedIds, true)) {
+            $selectedIds = array_values(array_diff($selectedIds, [$serviceId]));
+        } else {
+            $selectedIds[] = $serviceId;
+        }
+        $state['selected_ids'] = $selectedIds;
+        $state['manual_selected_ids'] = $selectedIds;
+        $state['select_all'] = false;
+        savedata("save", "guard_service_selection", $state);
+        $message = guardBuildServiceSelectionMessage($services, $selectedIds, false);
+        $keyboard = guardBuildServiceSelectionKeyboard($services, $selectedIds, $mode, false);
+        Editmessagetext($from_id, $message_id, $message, $keyboard, 'HTML');
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'وضعیت سرویس به‌روزرسانی شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'toggle_all') {
+        if ($selectAll) {
+            $manualSelected = isset($state['manual_selected_ids']) && is_array($state['manual_selected_ids']) ? $state['manual_selected_ids'] : [];
+            $selectedIds = guardNormalizeSelectedServiceIds($manualSelected, $availableIds, false);
+            $state['select_all'] = false;
+        } else {
+            $state['manual_selected_ids'] = $selectedIds;
+            $selectedIds = $availableIds;
+            $state['select_all'] = true;
+        }
+        $state['selected_ids'] = $selectedIds;
+        savedata("save", "guard_service_selection", $state);
+        $message = guardBuildServiceSelectionMessage($services, $selectedIds, !empty($state['select_all']));
+        $keyboard = guardBuildServiceSelectionKeyboard($services, $selectedIds, $mode, !empty($state['select_all']));
+        Editmessagetext($from_id, $message_id, $message, $keyboard, 'HTML');
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => !empty($state['select_all']) ? 'همه سرویس‌ها فعال شد.' : 'حالت همه سرویس‌ها خاموش شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'back') {
+        guardRestorePanelSelection($from_id, $state);
+        savedata("save", "guard_service_selection", null);
+        if ($mode === 'create') {
+            sendmessage($from_id, $textbotlang['Admin']['managepanel']['getapikey'], $backadmin, 'HTML');
+            step('add_guard_api_key', $from_id);
+        } else {
+            step('home', $from_id);
+        }
+        deletemessage($from_id, $message_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'عملیات لغو شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'close') {
+        guardRestorePanelSelection($from_id, $state);
+        savedata("save", "guard_service_selection", null);
+        deletemessage($from_id, $message_id);
+        if ($mode === 'create') {
+            sendmessage($from_id, $textbotlang['Admin']['managepanel']['getapikey'], $backadmin, 'HTML');
+            step('add_guard_api_key', $from_id);
+        } else {
+            step('home', $from_id);
+        }
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'منو بسته شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'done' || $action === 'save') {
+        $effectiveSelected = $selectAll ? $availableIds : guardNormalizeSelectedServiceIds($selectedIds, $availableIds, false);
+        if (empty($effectiveSelected)) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => '⚠️ حداقل یک سرویس را انتخاب کنید',
+                'show_alert' => true,
+                'cache_time' => 3,
+            ]);
+            return;
+        }
+        $storageValue = guardEncodeServiceSelectionForStorage($effectiveSelected, $availableIds, $selectAll);
+        if ($mode === 'create') {
+            savedata("save", "guard_service_ids", $storageValue);
+            savedata("save", "guard_service_selection", null);
+            sendmessage($from_id, $textbotlang['Admin']['managepanel']['getlimitedpanel'], $backadmin, 'HTML');
+            step('getlimitedpanel', $from_id);
+            savedata("save", "password", "null");
+        } else {
+            $panelName = isset($state['panel']) ? $state['panel'] : ($user['Processing_value'] ?? null);
+            if ($panelName === null) {
+                telegram('answerCallbackQuery', [
+                    'callback_query_id' => $callback_query_id,
+                    'text' => 'نام پنل Guard مشخص نیست.',
+                    'show_alert' => true,
+                    'cache_time' => 3,
+                ]);
+                return;
+            }
+            update("marzban_panel", "guard_service_ids", $storageValue, "name_panel", $panelName);
+            $state['selected_ids'] = $selectAll ? $availableIds : $effectiveSelected;
+            $state['select_all'] = $selectAll;
+            $state['manual_selected_ids'] = $state['manual_selected_ids'] ?? $effectiveSelected;
+            savedata("save", "guard_service_selection", $state);
+            $message = guardBuildServiceSelectionMessage($services, $state['selected_ids'], $selectAll);
+            $message .= "\n\n✅ تنظیمات سرویس Guard ذخیره شد.";
+            $keyboard = guardBuildServiceSelectionKeyboard($services, $state['selected_ids'], $mode, $selectAll);
+            Editmessagetext($from_id, $message_id, $message, $keyboard, 'HTML');
+            guardRestorePanelSelection($from_id, $state);
+            step('home', $from_id);
+        }
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'ذخیره شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+} elseif ($user['step'] == "guard_service_selection_new" || $user['step'] == "guard_service_selection_edit") {
+    $userdata = json_decode($user['Processing_value'], true);
+    $state = isset($userdata['guard_service_selection']) ? $userdata['guard_service_selection'] : null;
+    $mode = $state['mode'] ?? ($user['step'] == "guard_service_selection_edit" ? 'edit' : 'create');
+    $inputText = isset($text) ? trim((string) $text) : '';
+    if (!is_array($state) || empty($state['services'])) {
+        if ($mode === 'edit') {
+            outtypepanel("guard", "❌ لیست سرویس Guard در دسترس نیست. لطفاً دوباره تلاش کنید.");
+            step('home', $from_id);
+        } else {
+            sendmessage($from_id, "❌ لیست سرویس Guard در دسترس نیست. لطفاً مجدداً تلاش کنید.", $backadmin, 'HTML');
+            step('add_guard_api_key', $from_id);
+        }
+        return;
+    }
+    if ($mode === 'edit' && $inputText !== '' && !empty($state['panel'])) {
+        $panelForRefresh = select("marzban_panel", "*", "name_panel", $state['panel'], "select");
+        if (is_array($panelForRefresh) && ($panelForRefresh['type'] ?? '') === "guard") {
+            $servicesResponse = guardGetServices($panelForRefresh['name_panel']);
+            if (!empty($servicesResponse['status']) && !empty($servicesResponse['services'])) {
+                $state['services'] = $servicesResponse['services'];
+                $availableRefreshed = guardExtractServiceIdsFromList($state['services']);
+                $currentServices = guardParseServiceIds($panelForRefresh['guard_service_ids'] ?? null);
+                $state['selected_ids'] = guardNormalizeSelectedServiceIds($currentServices, $availableRefreshed, true);
+                $state['select_all'] = in_array('all', $currentServices, true) || in_array(0, $currentServices, true) || count($state['selected_ids']) === count($availableRefreshed);
+                if (!empty($state['select_all'])) {
+                    $state['selected_ids'] = $availableRefreshed;
+                }
+                $state['manual_selected_ids'] = guardNormalizeSelectedServiceIds($currentServices, $availableRefreshed, false);
+            }
+        }
+    }
+    $availableIds = guardExtractServiceIdsFromList($state['services']);
+    $selectedIds = guardNormalizeSelectedServiceIds($state['selected_ids'] ?? [], $availableIds, true);
+    $selectAll = !empty($state['select_all']) || (!empty($availableIds) && count($selectedIds) === count($availableIds));
+    if ($selectAll) {
+        $selectedIds = $availableIds;
+    }
+    $manualSelected = isset($state['manual_selected_ids']) && is_array($state['manual_selected_ids']) ? guardNormalizeSelectedServiceIds($state['manual_selected_ids'], $availableIds, false) : [];
+    if (empty($manualSelected)) {
+        $manualSelected = $selectedIds;
+    }
+    $state['select_all'] = $selectAll;
+    $state['selected_ids'] = $selectedIds;
+    $state['manual_selected_ids'] = $manualSelected;
+    if (!empty($state['message_id'])) {
+        deletemessage($from_id, $state['message_id']);
+        $state['message_id'] = null;
+    }
+    savedata("save", "guard_service_selection", $state);
+    $message = guardBuildServiceSelectionMessage($state['services'], $selectedIds, $selectAll);
+    $keyboard = guardBuildServiceSelectionKeyboard($state['services'], $selectedIds, $mode, $selectAll);
+    $messageResponse = sendmessage($from_id, $message, $keyboard, 'HTML');
+    if (isset($messageResponse['result']['message_id'])) {
+        $state['message_id'] = $messageResponse['result']['message_id'];
+        savedata("save", "guard_service_selection", $state);
+    }
+    return;
+} elseif (preg_match('/^guardsettings:(note|auto_delete|auto_renew|save|back)$/', $datain, $matches)) {
+    $action = $matches[1];
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'این گزینه فقط برای پنل Guard در دسترس است.',
+            'show_alert' => true,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    $currentUser = select("user", "*", "id", $from_id, "select");
+    $state = guardLoadGuardSettingsState(is_array($currentUser) ? $currentUser : $user, $panel, $message_id);
+    $state['message_id'] = $message_id;
+    guardPersistGuardSettingsState($from_id, $state);
+    if ($action === 'note') {
+        $promptMessageId = guardRenderGuardSettingsPrompt($from_id, $state, "🧑‍🏫 لطفاً توضیحات خود را ارسال کنید.\nدر صورتی که توضیحی ندارید عبارت « - » را ارسال نمایید.");
+        $state['message_id'] = $promptMessageId;
+        guardPersistGuardSettingsState($from_id, $state);
+        step('guard_settings_note', $from_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'دریافت توضیحات',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'auto_delete') {
+        $promptMessageId = guardRenderGuardSettingsPrompt($from_id, $state, "👩‍🏫 مدت‌زمان حذف خودکار را مشخص کنید\n0 = غیرفعال (حذف خودکار انجام نمی‌شود)\nمثال: 7 → حذف خودکار پس از 7 روز");
+        $state['message_id'] = $promptMessageId;
+        guardPersistGuardSettingsState($from_id, $state);
+        step('guard_settings_auto_delete', $from_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'منتظر عدد روزها هستم',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'auto_renew') {
+        $promptText = $textbotlang['Admin']['managepanel']['guard']['settings_auto_renew'];
+        $promptMessageId = guardRenderGuardSettingsPrompt($from_id, $state, $promptText);
+        $state['message_id'] = $promptMessageId;
+        guardPersistGuardSettingsState($from_id, $state);
+        step('guard_settings_auto_renew', $from_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'منتظر تنظیم تمدید خودکار هستم',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'save') {
+        $panelName = $state['panel'] ?? ($panel['name_panel'] ?? null);
+        if ($panelName === null) {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => 'نام پنل Guard مشخص نیست.',
+                'show_alert' => true,
+                'cache_time' => 3,
+            ]);
+            return;
+        }
+        $noteToSave = $state['note'] ?? '';
+        $autoDeleteDays = max(0, intval($state['auto_delete_days'] ?? 0));
+        $autoRenewals = $state['auto_renewals'] ?? [];
+        update("marzban_panel", "guard_note", $noteToSave, "name_panel", $panelName);
+        update("marzban_panel", "guard_auto_delete_days", $autoDeleteDays, "name_panel", $panelName);
+        update("marzban_panel", "guard_auto_renewals", json_encode($autoRenewals, JSON_UNESCAPED_UNICODE), "name_panel", $panelName);
+        $state['note'] = $noteToSave;
+        $state['auto_delete_days'] = $autoDeleteDays;
+        $state['auto_renewals'] = is_array($autoRenewals) ? $autoRenewals : [];
+        $state['saved'] = guardExtractSavedGuardSettings([
+            'guard_note' => $noteToSave,
+            'guard_auto_delete_days' => $autoDeleteDays,
+            'guard_auto_renewals' => $autoRenewals,
+        ]);
+        $state['pending_changes'] = false;
+        $messageId = guardRenderGuardSettingsSummary($from_id, $state, true);
+        $state['message_id'] = $messageId;
+        guardPersistGuardSettingsState($from_id, $state);
+        step('guard_settings_summary', $from_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'ذخیره شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
+    if ($action === 'back') {
+        update("user", "Processing_value_one", "none", "id", $from_id);
+        if (!empty($message_id)) {
+            deletemessage($from_id, $message_id);
+        }
+        step('home', $from_id);
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'منو بسته شد.',
+            'show_alert' => false,
+            'cache_time' => 3,
+        ]);
+        return;
+    }
 } elseif ($user['step'] == "add_password_panel") {
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['getlimitedpanel'], $backadmin, 'HTML');
     step('getlimitedpanel', $from_id);
@@ -1406,6 +2309,29 @@ $paycount
     $time = "1";
     $valume = "100";
     $changeloc = "offchangeloc";
+    $apiKey = isset($userdata['api_key']) ? $userdata['api_key'] : null;
+    $guardServiceIds = isset($userdata['guard_service_ids']) ? $userdata['guard_service_ids'] : null;
+    if ($userdata['type'] == "guard" && ($guardServiceIds === null || $guardServiceIds === '')) {
+        $guardServiceIds = "all";
+    }
+    $guardNoteSetting = isset($userdata['guard_note']) ? $userdata['guard_note'] : '';
+    $guardAutoDeleteDays = isset($userdata['guard_auto_delete_days']) ? intval($userdata['guard_auto_delete_days']) : 0;
+    $guardAutoRenewalsSetting = isset($userdata['guard_auto_renewals']) ? json_encode($userdata['guard_auto_renewals'], JSON_UNESCAPED_UNICODE) : json_encode([]);
+    if ($userdata['type'] != "guard") {
+        $guardNoteSetting = null;
+        $guardAutoDeleteDays = 0;
+        $guardAutoRenewalsSetting = null;
+    }
+    if ($userdata['type'] == "guard") {
+        $guardColumnsCheck = ensureGuardPanelColumnsReady($pdo);
+        if ($guardColumnsCheck['status'] === false) {
+            $missingList = implode(', ', $guardColumnsCheck['missing']);
+            $warningMessage = "❌ امکان ثبت پنل Guard وجود ندارد. ستون‌های موردنیاز یافت نشدند: {$missingList}\nلطفاً یکبار دیگر صفحه را اجرا کنید تا مهاجرت خودکار انجام شود و سپس مجدداً تلاش نمایید.";
+            sendmessage($from_id, $warningMessage, $backadmin, 'HTML');
+            step('add_guard_api_key', $from_id);
+            return;
+        }
+    }
     $value = json_encode(array(
         'f' => "4000",
         'n' => "4000",
@@ -1430,7 +2356,7 @@ $paycount
     $statusextend = "on_extend";
     $subvip = "offsubvip";
     $stauts_on_holed = "1";
-    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:val_usertest,:time_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test)");
+    $stmt = $pdo->prepare("INSERT INTO marzban_panel (code_panel,name_panel,sublink,config,MethodUsername,TestAccount,status,limit_panel,namecustom,Methodextend,type,conecton,inboundid,agent,inbound_deactive,inboundstatus,url_panel,username_panel,password_panel,api_key,time_usertest,val_usertest,linksubx,priceextravolume,priceextratime,pricecustomvolume,pricecustomtime,mainvolume,maxvolume,maintime,maxtime,status_extend,subvip,changeloc,customvolume,on_hold_test,guard_service_ids,guard_note,guard_auto_delete_days,guard_auto_renewals) VALUES (:code_panel,:name_panel,:sublink,:config,:MethodUsername,:TestAccount,:status,:limit_panel,:namecustom,:Methodextend,:type,:conecton,:inboundid,:agent,:inbound_deactive,:inboundstatus,:url_panel,:username_panel,:password_panel,:api_key,:val_usertest,:time_usertest,:linksubx,:priceextravolume,:priceextratime,:pricecustomvolume,:pricecustomtime,:mainvolume,:maxvolume,:maintime,:maxtime,:status_extend,:subvip,:changeloc,:customvolume,:on_hold_test,:guard_service_ids,:guard_note,:guard_auto_delete_days,:guard_auto_renewals)");
     $stmt->bindParam(':code_panel', $randomString);
     $stmt->bindParam(':name_panel', $userdata['namepanel'], PDO::PARAM_STR);
     $stmt->bindParam(':sublink', $sublink);
@@ -1451,6 +2377,7 @@ $paycount
     $stmt->bindParam(':linksubx', $userdata['url_panel']);
     $stmt->bindParam(':username_panel', $userdata['username']);
     $stmt->bindParam(':password_panel', $userdata['password']);
+    $stmt->bindParam(':api_key', $apiKey);
     $stmt->bindParam(':val_usertest', $valume);
     $stmt->bindParam(':time_usertest', $time);
     $stmt->bindParam(':priceextravolume', $value);
@@ -1466,6 +2393,10 @@ $paycount
     $stmt->bindParam(':changeloc', $changeloc);
     $stmt->bindParam(':customvolume', $VALUE);
     $stmt->bindParam(':on_hold_test', $stauts_on_holed);
+    $stmt->bindParam(':guard_service_ids', $guardServiceIds);
+    $stmt->bindParam(':guard_note', $guardNoteSetting);
+    $stmt->bindParam(':guard_auto_delete_days', $guardAutoDeleteDays);
+    $stmt->bindParam(':guard_auto_renewals', $guardAutoRenewalsSetting);
     $stmt->execute();
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['addedpanel'], $keyboardadmin, 'HTML');
     sendmessage($from_id, "🥳", $keyboardadmin, 'HTML');
@@ -2900,11 +3831,6 @@ $caption";
                 ['text' => "❌ کرون حذف حجم", 'callback_data' => "none"],
             ],
             [
-                ['text' => "⚙️ مدیریت", 'callback_data' => "cronjobs_settings"],
-                ['text' => "⏱ نمایش لیست", 'callback_data' => "cronjobs_settings"],
-                ['text' => "زمان‌بندی کرون‌ها", 'callback_data' => "none"],
-            ],
-            [
                 ['text' => "⚙️ تنظیمات", 'callback_data' => "linkappsetting"],
                 ['text' => $btnstatuslinkapp, 'callback_data' => "editstsuts-linkappstatus-{$setting['linkappstatus']}"],
                 ['text' => "🔗لینک دانلود برنامه", 'callback_data' => "linkappstatus"],
@@ -2995,6 +3921,12 @@ $caption";
             $valuenew = "oninline";
         }
         update("setting", "inlinebtnmain", $valuenew);
+        if ($valuenew == "offinline") {
+            $columnExists = $pdo->query("SHOW COLUMNS FROM user LIKE 'reply_keyboard_cleared'");
+            if ($columnExists !== false && $columnExists->fetch(PDO::FETCH_ASSOC) !== false) {
+                $pdo->prepare("UPDATE user SET reply_keyboard_cleared = 0")->execute();
+            }
+        }
     } elseif ($type == "verifystart") {
         if ($value == "onverify") {
             $valuenew = "offverify";
@@ -3531,11 +4463,6 @@ $caption";
                 ['text' => "❌ کرون حذف حجم", 'callback_data' => "none"],
             ],
             [
-                ['text' => "⚙️ مدیریت", 'callback_data' => "cronjobs_settings"],
-                ['text' => "⏱ نمایش لیست", 'callback_data' => "cronjobs_settings"],
-                ['text' => "زمان‌بندی کرون‌ها", 'callback_data' => "none"],
-            ],
-            [
                 ['text' => "⚙️ تنظیمات", 'callback_data' => "linkappsetting"],
                 ['text' => $btnstatuslinkapp, 'callback_data' => "editstsuts-linkappstatus-{$setting['linkappstatus']}"],
                 ['text' => "🔗لینک دانلود برنامه", 'callback_data' => "linkappstatus"],
@@ -3578,14 +4505,13 @@ $caption";
 آموزش تنظیم گروه :
 1 - ابتدا یک گروه  بسازید 
 2 - ربات  @myidbot را عضو گروه کنید و دستور /getgroupid@myidbot داخل گروه ارسال کنید 
-3 - حالت تاپیک یا انجمن گروه را از تنظیمات گروه روشن کنید
+3 - حالت تاپیک یا انجمن گروه را از تنظیمات گروه روشن کنید4
 4 - ربات خودتان را ادمین گروه کنید 
 5 - آیدی عددی ارسال شده را در ربات ارسال کنید.
 
 آیدی عددی فعلی شما: {$setting['Channel_Report']}";
     sendmessage($from_id, $textreports, $backadmin, 'HTML');
     step('addchannelid', $from_id);
-
 } elseif ($user['step'] == "addchannelid") {
     $outputcheck = sendmessage($text, $textbotlang['Admin']['Channel']['TestChannel'], null, 'HTML');
     if (empty($outputcheck['ok'])) {
@@ -3601,25 +4527,14 @@ $caption";
         sendmessage($from_id, $texterror, null, 'HTML');
         return;
     }
-
     if ($outputcheck['result']['chat']['is_forum'] == false) {
-        $texterror = "❌ گروه انتخاب شده درحالت انجمن نیست از تنظیمات گروه حالت تاپیک گروه را روشن کرده سپس آیدی عددی گروه را مجددا تنظیم نمایید";
+        $texterror = "❌ گروه انتخاب شده درحالت انجمن نیست ابتدا قابلیت تاپیک گروه را روشن کرده سپس آیدی عددی گروه را مجددا تنظیم نمایید";
         sendmessage($from_id, $texterror, null, 'HTML');
         return;
     }
-
-    // --- جدید: ریست کردن تاپیک‌های پورسانت/شبانه/اطلاع‌رسانی/بکاپ برای گروه جدید ---
-    $resetReports = ['porsantreport', 'reportnight', 'reportcron', 'backupfile'];
-    foreach ($resetReports as $reportKey) {
-        update("topicid", "idreport", 0, "report", $reportKey);
-    }
-
-    // --- ساخت تاپیک‌ها با فاصله‌ی ۵ ثانیه ---
-
-    // 🛍 گزارش های خرید
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "🛍 گزارش های خرید"
+        'name' => "🛍 گزارش های خرید"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3629,11 +4544,9 @@ $caption";
     if ($buyreport != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "buyreport");
     }
-    sleep(5);
-
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "📌 گزارش خرید خدمات"
+        'name' => "📌 گزارش خرید خدمات"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3643,11 +4556,9 @@ $caption";
     if ($otherservice != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "otherservice");
     }
-    sleep(5);
-
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "🔑 گزارش اکانت تست"
+        'name' => "🔑 گزارش اکانت تست"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3657,11 +4568,9 @@ $caption";
     if ($reporttest != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "reporttest");
     }
-    sleep(5);
-
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "⚙️ سایر گزارشات"
+        'name' => "⚙️ سایر گزارشات"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3671,11 +4580,9 @@ $caption";
     if ($errorreport != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "otherreport");
     }
-    sleep(5);
-
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "❌ گزارش خطا ها"
+        'name' => "❌ گزارش خطا ها"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3685,11 +4592,9 @@ $caption";
     if ($errorreport != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "errorreport");
     }
-    sleep(5);
-
     $createForumTopic = telegram('createForumTopic', [
         'chat_id' => $text,
-        'name'   => "💰 گزارش مالی"
+        'name' => "💰 گزارش مالی"
     ]);
     if (!$createForumTopic['ok']) {
         $texterror = "❌ ربات ادمین گروه نیست";
@@ -3699,12 +4604,9 @@ $caption";
     if ($paymentreports != $createForumTopic['result']['message_thread_id']) {
         update("topicid", "idreport", $createForumTopic['result']['message_thread_id'], "report", "paymentreport");
     }
-
-
     sendmessage($from_id, $textbotlang['Admin']['Channel']['SetChannelReport'], $setting_panel, 'HTML');
     update("setting", "Channel_Report", $text);
     step('home', $from_id);
-
 } elseif ($text == "🏬 تنظیمات فروشگاه" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['users']['selectoption'], $shopkeyboard, 'HTML');
 } elseif ($text == "🛍 اضافه کردن محصول" && $adminrulecheck['rule'] == "administrator") {
@@ -4357,7 +5259,7 @@ $caption";
     sendmessage($from_id, $textbotlang['Admin']['Balance']['NegativeBalance'], $backadmin, 'HTML');
     step('Negative_Balance', $from_id);
 } elseif ($user['step'] == "Negative_Balance") {
-    if (!in_array($text, $users_ids)) {
+    if (!userExists($text)) {
         sendmessage($from_id, $textbotlang['Admin']['not-user'], $backadmin, 'HTML');
         return;
     }
@@ -4412,7 +5314,7 @@ $caption";
     } else {
         $id_user = $dataget[1];
     }
-    if (!in_array($id_user, $users_ids)) {
+    if (!userExists($id_user)) {
         sendmessage($from_id, $textbotlang['Admin']['not-user'], null, 'HTML');
         return;
     }
@@ -4932,6 +5834,18 @@ $text_expie_agent
             }
             sendmessage($from_id, $text_marzban, $optionMarzban, 'HTML');
         }
+    } elseif ($marzban_list_get['type'] == "guard") {
+        $guardConfig = getGuardPanelConfig($marzban_list_get['name_panel']);
+        if ($guardConfig['status'] === false) {
+            $errorMsg = $guardConfig['msg'] ?? $textbotlang['Admin']['managepanel']['guard']['connection_error'];
+            sendmessage($from_id, "❌ {$errorMsg}", $optionGuard, 'HTML');
+        } else {
+            $testResult = guardTestConnection($guardConfig['panel']['url_panel'], $guardConfig['api_key']);
+            $statusText = guardFormatConnectionResult($testResult);
+            $text_marzban = "{$statusText}\nگروه کاربری :{$marzban_list_get['agent']}"
+                . "\n\n⭕️ برای مدیریت پنل یکی از گزینه های زیر را انتخاب کنید";
+            sendmessage($from_id, $text_marzban, $optionGuard, 'HTML');
+        }
     } elseif ($marzban_list_get['type'] == "x-ui_single") {
         $x_ui_check_connect = login($marzban_list_get['code_panel'], false);
         if ($x_ui_check_connect['success']) {
@@ -5118,6 +6032,12 @@ $text_expie_agent
     update("user", "Processing_value", $text, "id", $from_id);
     step('home', $from_id);
 } elseif ($text == "🔗 ویرایش آدرس پنل" && $adminrulecheck['rule'] == "administrator") {
+    $typepanel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
+    if ($typepanel && $typepanel['type'] == "guard") {
+        outtypepanel($typepanel['type'], $textbotlang['Admin']['managepanel']['guardfixedurl']);
+        step('home', $from_id);
+        return;
+    }
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['geturlnew'], $backadmin, 'HTML');
     step('GeturlNew', $from_id);
 } elseif ($user['step'] == "GeturlNew") {
@@ -5209,6 +6129,186 @@ $text_expie_agent
     sendmessage($from_id, "✅ شناسه اینباند با موفقیت ذخیره گردید", $optionX_ui_single, 'HTML');
     update("marzban_panel", "inboundid", $text, "name_panel", $user['Processing_value']);
     step('home', $from_id);
+} elseif ($text == "🔐 ویرایش کلید" && $adminrulecheck['rule'] == "administrator") {
+    $panelName = guardResolveUserPanelName($user);
+    $typepanel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($typepanel) || ($typepanel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    sendmessage($from_id, $textbotlang['Admin']['managepanel']['guard']['request_api_key'], $backadmin, 'HTML');
+    step('guard_edit_api_key', $from_id);
+} elseif ($user['step'] == "guard_edit_api_key") {
+    $panelName = guardResolveUserPanelName($user);
+    $typepanel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($typepanel) || ($typepanel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    $apiKey = trim($text);
+    if ($apiKey === '') {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
+        return;
+    }
+    $baseUrl = guardGetBaseUrl($typepanel['url_panel'] ?? null);
+    $currentKey = trim((string) (!empty($typepanel['api_key']) ? $typepanel['api_key'] : ($typepanel['password_panel'] ?? '')));
+    if ($currentKey !== '' && hash_equals($currentKey, $apiKey)) {
+        $sameKeyMessage = "ℹ️ کلید جدید با کلید قبلی یکسان است. تغییری انجام نشد.";
+        $testResult = guardTestConnection($baseUrl, $apiKey);
+        $statusText = guardFormatConnectionResult($testResult);
+        if ($statusText !== '') {
+            $sameKeyMessage .= "\n{$statusText}";
+        }
+        outtypepanel("guard", $sameKeyMessage);
+        step('home', $from_id);
+        return;
+    }
+    update("marzban_panel", "api_key", $apiKey, "name_panel", $user['Processing_value']);
+    update("marzban_panel", "password_panel", $apiKey, "name_panel", $user['Processing_value']);
+    update("marzban_panel", "url_panel", $baseUrl, "name_panel", $user['Processing_value']);
+    update("marzban_panel", "datelogin", null, "name_panel", $user['Processing_value']);
+    $connectionResult = guardTestConnection($baseUrl, $apiKey);
+    $statusText = guardFormatConnectionResult($connectionResult);
+    $savedMessage = $textbotlang['Admin']['managepanel']['guard']['api_key_saved'] ?? "🔑 کلید Guard ذخیره شد.";
+    outtypepanel("guard", "{$savedMessage}\n{$statusText}");
+    step('home', $from_id);
+} elseif ($text == "⁉️ وضعیت اتصال به پنل" && $adminrulecheck['rule'] == "administrator") {
+    $panelName = guardResolveUserPanelName($user);
+    $typepanel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($typepanel) || ($typepanel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['errorstateuspanel'], $backadmin, 'HTML');
+        return;
+    }
+    $apiKey = !empty($typepanel['api_key']) ? $typepanel['api_key'] : ($typepanel['password_panel'] ?? '');
+    if (trim($apiKey) === '') {
+        outtypepanel("guard", $textbotlang['Admin']['managepanel']['guard']['connection_missing_key']);
+        step('home', $from_id);
+        return;
+    }
+    $testResult = guardTestConnection($typepanel['url_panel'] ?? null, $apiKey);
+    $statusText = guardFormatConnectionResult($testResult);
+    outtypepanel("guard", $statusText);
+    step('home', $from_id);
+} elseif ($text == "⚙️ تنظیم سرویس ها" && $adminrulecheck['rule'] == "administrator") {
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidserviceid'], $backadmin, 'HTML');
+        return;
+    }
+    $servicesResponse = guardGetServices($panel['name_panel']);
+    if ($servicesResponse['status'] === false) {
+        $errorMsg = $servicesResponse['msg'] ?? 'خطای ناشناخته';
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, $errorMsg);
+        outtypepanel("guard", $failText);
+        return;
+    }
+    $services = $servicesResponse['services'];
+    if (empty($services)) {
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, 'لیست سرویس Guard خالی است.');
+        outtypepanel("guard", $failText);
+        return;
+    }
+    $availableIds = guardExtractServiceIdsFromList($services);
+    if (empty($availableIds)) {
+        $failTextTemplate = $textbotlang['Admin']['managepanel']['guard']['service_fetch_failed'] ?? "❌ دریافت سرویس‌ها از Guard ناموفق بود: %s";
+        $failText = sprintf($failTextTemplate, 'شناسه معتبر برای سرویس‌ها یافت نشد.');
+        outtypepanel("guard", $failText);
+        return;
+    }
+    $currentServices = guardParseServiceIds($panel['guard_service_ids'] ?? null);
+    $currentSelection = guardNormalizeSelectedServiceIds($currentServices, $availableIds, true);
+    $selectAll = in_array('all', $currentServices, true) || in_array(0, $currentServices, true) || count($currentSelection) === count($availableIds);
+    if ($selectAll) {
+        $currentSelection = $availableIds;
+    }
+    $manualSelection = guardNormalizeSelectedServiceIds($currentServices, $availableIds, false);
+    $selectionState = [
+        'mode' => 'edit',
+        'panel' => $panel['name_panel'],
+        'services' => $services,
+        'selected_ids' => $currentSelection,
+        'select_all' => $selectAll,
+        'manual_selected_ids' => $manualSelection,
+    ];
+    savedata("save", "guard_service_selection", $selectionState);
+    $message = guardBuildServiceSelectionMessage($services, $currentSelection, $selectAll);
+    $keyboard = guardBuildServiceSelectionKeyboard($services, $currentSelection, 'edit', $selectAll);
+    $messageResponse = sendmessage($from_id, $message, $keyboard, 'HTML');
+    if (isset($messageResponse['result']['message_id'])) {
+        $selectionState['message_id'] = $messageResponse['result']['message_id'];
+        savedata("save", "guard_service_selection", $selectionState);
+    }
+    step('guard_service_selection_edit', $from_id);
+} elseif ($text == "🎛️ تنظیمات سرویس" && $adminrulecheck['rule'] == "administrator") {
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['saveddata'], $backadmin, 'HTML');
+        return;
+    }
+    $state = guardBuildGuardSettingsState($panel);
+    $messageId = guardRenderGuardSettingsSummary($from_id, $state, false);
+    $state['message_id'] = $messageId;
+    guardPersistGuardSettingsState($from_id, $state);
+    step('guard_settings_summary', $from_id);
+} elseif ($user['step'] == "guard_settings_note") {
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidserviceid'], $backadmin, 'HTML');
+        return;
+    }
+    $currentUser = select("user", "*", "id", $from_id, "select");
+    $state = guardLoadGuardSettingsState(is_array($currentUser) ? $currentUser : $user, $panel);
+    $noteText = trim($text);
+    $state['note'] = ($noteText === '-') ? '' : $noteText;
+    $state['pending_changes'] = true;
+    guardPersistGuardSettingsState($from_id, $state);
+    $state['message_id'] = guardRenderGuardSettingsSummary($from_id, $state, false);
+    guardPersistGuardSettingsState($from_id, $state);
+    step('guard_settings_summary', $from_id);
+} elseif ($user['step'] == "guard_settings_auto_delete") {
+    if (!preg_match('/^\d+$/', $text)) {
+        sendmessage($from_id, "❌ مقدار باید فقط عدد باشد.", $backadmin, 'HTML');
+        return;
+    }
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidserviceid'], $backadmin, 'HTML');
+        return;
+    }
+    $currentUser = select("user", "*", "id", $from_id, "select");
+    $state = guardLoadGuardSettingsState(is_array($currentUser) ? $currentUser : $user, $panel);
+    $state['auto_delete_days'] = intval($text);
+    $state['pending_changes'] = true;
+    guardPersistGuardSettingsState($from_id, $state);
+    $state['message_id'] = guardRenderGuardSettingsSummary($from_id, $state, false);
+    guardPersistGuardSettingsState($from_id, $state);
+    step('guard_settings_summary', $from_id);
+} elseif ($user['step'] == "guard_settings_auto_renew") {
+    $panelName = guardResolveUserPanelName($user);
+    $panel = $panelName ? select("marzban_panel", "*", "name_panel", $panelName, "select") : null;
+    if (!is_array($panel) || ($panel['type'] ?? null) != "guard") {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['invalidserviceid'], $backadmin, 'HTML');
+        return;
+    }
+    $currentUser = select("user", "*", "id", $from_id, "select");
+    $state = guardLoadGuardSettingsState(is_array($currentUser) ? $currentUser : $user, $panel);
+    $parsedRenewal = guardParseAutoRenewalsInput($text);
+    if ($parsedRenewal['status'] === false) {
+        sendmessage($from_id, $textbotlang['Admin']['managepanel']['guard']['settings_invalid_renewal'], $backadmin, 'HTML');
+        return;
+    }
+    $state['auto_renewals'] = $parsedRenewal['entries'];
+    $state['pending_changes'] = true;
+    guardPersistGuardSettingsState($from_id, $state);
+    $state['message_id'] = guardRenderGuardSettingsSummary($from_id, $state, false);
+    guardPersistGuardSettingsState($from_id, $state);
+    step('guard_settings_summary', $from_id);
 } elseif ($text == "👤 ویرایش نام کاربری" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['Admin']['managepanel']['getusernamenew'], $backadmin, 'HTML');
     step('GetusernameNew', $from_id);
@@ -6573,15 +7673,6 @@ n2", $backadmin, 'HTML');
     $textmax = "📌 حداکثر مبلغی که می خواهید کاربر حساب خود را شارژ کند را تعیین کنید";
     sendmessage($from_id, $textmax, $backadmin, 'HTML');
     step('maxbalance', $from_id);
-} elseif ($datain == "walletaddress" && $adminrulecheck['rule'] == "administrator") {
-    $PaySetting = select("PaySetting", "ValuePay", "NamePay", "walletaddress", "select");
-    $currentWallet = $PaySetting['ValuePay'] ?? '';
-    $texttronseller = "💼 لطفاً آدرس ولت ترون (TRC20) خود را ارسال کنید.\n\nولت فعلی شما: {$currentWallet}";
-    sendmessage($from_id, $texttronseller, $backadmin, 'HTML');
-
-    savedata('clear', 'walletaddress_origin', 'general');
-
-    step('walletaddresssiranpay', $from_id);
 } elseif ($user['step'] == "maxbalance") {
     if (!ctype_digit($text)) {
         sendmessage($from_id, $textbotlang['Admin']['agent']['invalidvlue'], $backadmin, 'HTML');
@@ -6794,18 +7885,7 @@ n2", $backadmin, 'HTML');
         step('home', $from_id);
         return;
     }
-    if ($DataUserOut['online_at'] == "online") {
-        $lastonline = 'آنلاین';
-    } elseif ($DataUserOut['online_at'] == "offline") {
-        $lastonline = 'آفلاین';
-    } else {
-        if (isset($DataUserOut['online_at']) && $DataUserOut['online_at'] !== null) {
-            $dateString = $DataUserOut['online_at'];
-            $lastonline = jdate('Y/m/d H:i:s', strtotime($dateString));
-        } else {
-            $lastonline = "متصل نشده";
-        }
-    }
+    $lastonline = formatOnlineAtLabel($DataUserOut['online_at'] ?? null, $DataUserOut['is_online'] ?? null);
     #-------------status----------------#
     $status = $DataUserOut['status'];
     $status_var = [
@@ -7492,130 +8572,6 @@ n2", $backadmin, 'HTML');
             'parse_mode' => "HTML"
         ]);
     }
-} elseif ($datain == "cronjobs_settings" && $adminrulecheck['rule'] == "administrator") {
-    if (!function_exists('buildCronJobsKeyboard')) {
-        sendmessage($from_id, "امکان مدیریت کرون‌ها در این نسخه فعال نشده است.", $backadmin, 'HTML');
-        return;
-    }
-    $cronIntro = "برای تغییر زمان‌بندی هر کرون، دکمه «⚙️ تنظیمات» همان ردیف را انتخاب کنید.";
-    sendmessage($from_id, $cronIntro, buildCronJobsKeyboard(), 'HTML');
-} elseif (preg_match('/^cronjob_config-([A-Za-z0-9_]+)/', $datain, $cronMatches) && $adminrulecheck['rule'] == "administrator") {
-    if (!function_exists('getCronJobDefinitions') || !function_exists('loadCronSchedules') || !function_exists('describeCronSchedule')) {
-        sendmessage($from_id, "امکان مدیریت کرون‌ها در این نسخه فعال نشده است.", $backadmin, 'HTML');
-        return;
-    }
-    $jobKey = $cronMatches[1];
-    $definitions = getCronJobDefinitions();
-    if (!isset($definitions[$jobKey])) {
-        sendmessage($from_id, "کرون انتخابی یافت نشد.", $backadmin, 'HTML');
-        return;
-    }
-    $schedules = loadCronSchedules();
-    $currentSchedule = $schedules[$jobKey] ?? $definitions[$jobKey]['default'];
-    $readableSchedule = describeCronSchedule($currentSchedule);
-    $definitionLabel = $definitions[$jobKey]['admin_label'];
-    $isDisabled = isset($currentSchedule['unit']) && $currentSchedule['unit'] === 'disabled';
-    $toggleText = $isDisabled ? '✅ فعال‌سازی کرون' : '❌ غیرفعال‌سازی کرون';
-    $toggleAction = $isDisabled ? 'enable' : 'disable';
-
-    $unitKeyboard = json_encode([
-        'inline_keyboard' => [
-            [
-                ['text' => "دقیقه‌ای", 'callback_data' => "cronjob_unit-{$jobKey}-minute"],
-                ['text' => "ساعتی", 'callback_data' => "cronjob_unit-{$jobKey}-hour"],
-                ['text' => "روزانه", 'callback_data' => "cronjob_unit-{$jobKey}-day"],
-            ],
-            [
-                ['text' => $toggleText, 'callback_data' => "cronjob_toggle-{$jobKey}-{$toggleAction}"],
-            ],
-            [
-                ['text' => "🔙 بازگشت", 'callback_data' => "cronjobs_settings"],
-            ],
-        ],
-    ], JSON_UNESCAPED_UNICODE);
-    $message = "⏱ زمان‌بندی فعلی «{$definitionLabel}»: {$readableSchedule}\n\nواحد مورد نظر را انتخاب کنید.";
-    sendmessage($from_id, $message, $unitKeyboard, 'HTML');
-} elseif (preg_match('/^cronjob_toggle-([A-Za-z0-9_]+)-(enable|disable)$/', $datain, $cronMatches) && $adminrulecheck['rule'] == "administrator") {
-    if (!function_exists('getCronJobDefinitions') || !function_exists('updateCronSchedule') || !function_exists('describeCronSchedule')) {
-        sendmessage($from_id, "امکان مدیریت کرون‌ها در این نسخه فعال نشده است.", $backadmin, 'HTML');
-        return;
-    }
-    $jobKey = $cronMatches[1];
-    $action = $cronMatches[2];
-    $definitions = getCronJobDefinitions();
-    if (!isset($definitions[$jobKey])) {
-        sendmessage($from_id, "کرون انتخابی یافت نشد.", $backadmin, 'HTML');
-        return;
-    }
-
-    if ($action === 'disable') {
-        $newSchedule = ['unit' => 'disabled', 'value' => 1];
-        $statusText = "کرون «{$definitions[$jobKey]['admin_label']}» غیرفعال شد.";
-    } else {
-        $newSchedule = $definitions[$jobKey]['default'] ?? ['unit' => 'minute', 'value' => 1];
-        $description = describeCronSchedule($newSchedule);
-        $statusText = "کرون «{$definitions[$jobKey]['admin_label']}» فعال شد. زمان‌بندی فعلی: {$description}";
-    }
-
-    if (!updateCronSchedule($jobKey, $newSchedule)) {
-        sendmessage($from_id, "خطا در ذخیره‌سازی تنظیمات کرون.", $backadmin, 'HTML');
-        return;
-    }
-
-    sendmessage($from_id, $statusText, buildCronJobsKeyboard(), 'HTML');
-} elseif (preg_match('/^cronjob_unit-([A-Za-z0-9_]+)-(minute|hour|day)$/', $datain, $cronMatches) && $adminrulecheck['rule'] == "administrator") {
-    if (!function_exists('getCronJobDefinitions')) {
-        sendmessage($from_id, "امکان مدیریت کرون‌ها در این نسخه فعال نشده است.", $backadmin, 'HTML');
-        return;
-    }
-    $jobKey = $cronMatches[1];
-    $unit = $cronMatches[2];
-    $definitions = getCronJobDefinitions();
-    if (!isset($definitions[$jobKey])) {
-        sendmessage($from_id, "کرون انتخابی یافت نشد.", $backadmin, 'HTML');
-        return;
-    }
-    $payload = json_encode(['cron_key' => $jobKey, 'unit' => $unit], JSON_UNESCAPED_UNICODE);
-    update("user", "Processing_value", $payload, "id", $from_id);
-    step("cronjob_set_value", $from_id);
-    $unitTitle = getCronUnitTitle($unit);
-    sendmessage($from_id, "🔢 مقدار جدید (به صورت عدد) برای بازه زمانی {$unitTitle} ارسال کنید.", $backadmin, 'HTML');
-} elseif ($user['step'] == "cronjob_set_value") {
-    $pending = json_decode($user['Processing_value'], true);
-    if (!is_array($pending) || empty($pending['cron_key']) || empty($pending['unit'])) {
-        sendmessage($from_id, "درخواست نامعتبر است.", $backadmin, 'HTML');
-        step('home', $from_id);
-        return;
-    }
-    if (!ctype_digit($text) || intval($text) < 1) {
-        sendmessage($from_id, $textbotlang['Admin']['agent']['invalidvlue'], $backadmin, 'HTML');
-        return;
-    }
-    if (!function_exists('updateCronSchedule') || !function_exists('getCronJobDefinitions') || !function_exists('describeCronSchedule')) {
-        sendmessage($from_id, "امکان ذخیره‌سازی تنظیمات کرون وجود ندارد.", $backadmin, 'HTML');
-        step('home', $from_id);
-        return;
-    }
-    $definitions = getCronJobDefinitions();
-    $jobKey = $pending['cron_key'];
-    if (!isset($definitions[$jobKey])) {
-        sendmessage($from_id, "کرون انتخابی یافت نشد.", $backadmin, 'HTML');
-        step('home', $from_id);
-        return;
-    }
-    $value = intval($text);
-    if (!updateCronSchedule($jobKey, ['unit' => $pending['unit'], 'value' => $value])) {
-        sendmessage($from_id, "خطا در ذخیره‌سازی تنظیمات کرون.", $backadmin, 'HTML');
-        step('home', $from_id);
-        return;
-    }
-    $schedules = loadCronSchedules();
-    $currentSchedule = $schedules[$jobKey] ?? ['unit' => $pending['unit'], 'value' => $value];
-    $description = describeCronSchedule($currentSchedule);
-    $label = $definitions[$jobKey]['admin_label'];
-    sendmessage($from_id, "✅ زمان‌بندی «{$label}» به {$description} تغییر کرد.", buildCronJobsKeyboard(), 'HTML');
-    update("user", "Processing_value", "", "id", $from_id);
-    step('home', $from_id);
 } elseif ($datain == "settimecornremovevolume" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, $textbotlang['Admin']['cronjob']['setvolumeremove'] . $setting['cronvolumere'] . "روز", $backadmin, 'HTML');
     step("getcronvolumere", $from_id);
@@ -9113,9 +10069,6 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
                 ['text' => "⬇️ حداقل شارژ موجودی", 'callback_data' => "mainbalanceaccount"],
             ],
             [
-                ['text' => "آدرس ولت", 'callback_data' => "walletaddress"],
-            ],
-            [
                 ['text' => "❌ بستن", 'callback_data' => 'close_stat']
             ],
         ]
@@ -9355,9 +10308,6 @@ n2", $backadmin, 'HTML');
             [
                 ['text' => "⬆️ حداکثر شارژ موجودی", 'callback_data' => "maxbalanceaccount"],
                 ['text' => "⬇️ حداقل شارژ موجودی", 'callback_data' => "mainbalanceaccount"],
-            ],
-            [
-                ['text' => "آدرس ولت", 'callback_data' => "walletaddress"],
             ],
             [
                 ['text' => "❌ بستن", 'callback_data' => 'close_stat']
@@ -9989,16 +10939,7 @@ f,n.n2", $backadmin, 'HTML');
     step("home", $from_id);
     update("PaySetting", "ValuePay", $text, "NamePay", "maxbalancezarinpal");
 } elseif ($user['step'] == "walletaddresssiranpay") {
-    $walletInputSource = $text;
-    if (isset($update) && is_array($update)) {
-        if (isset($update['message']['text']) && is_string($update['message']['text'])) {
-            $walletInputSource = $update['message']['text'];
-        } elseif (isset($update['edited_message']['text']) && is_string($update['edited_message']['text'])) {
-            $walletInputSource = $update['edited_message']['text'];
-        }
-    }
-
-    $walletInput = trim((string) $walletInputSource);
+    $walletInput = trim((string) $text);
 
     $userRecord = select("user", "*", "id", $from_id, "select");
     $processingData = [];
@@ -10017,7 +10958,7 @@ f,n.n2", $backadmin, 'HTML');
         return;
     }
 
-    $standardizedWallet = $walletInput;
+    $standardizedWallet = strtoupper($walletInput);
 
     $successKeyboard = $walletOrigin === 'trnado' ? $trnado : $keyboardadmin;
 
@@ -10642,7 +11583,7 @@ f,n.n2", $backadmin, 'HTML');
     توجه داشتید باشید در کاربر مقصد در صورت داشتن موجودی حذف خواهد شد", $backadmin, 'HTML');
     step("getidfortransfers", $from_id);
 } elseif ($user['step'] == "getidfortransfers") {
-    if (!in_array($text, $users_ids)) {
+    if (!userExists($text)) {
         sendmessage($from_id, $textbotlang['Admin']['not-user'], $backadmin, 'HTML');
         return;
     }
@@ -10762,6 +11703,7 @@ f,n.n2", $backadmin, 'HTML');
                 $servies[] = $service;
             }
             update("marzban_panel", "proxies", json_encode($servies, true), "name_panel", $user['Processing_value']);
+            syncSuiInboundsWithProxies($panel['id'] ?? null);
         }
     } elseif ($panel['type'] == "ibsng" || $panel['type'] == "mikrotik") {
         update("marzban_panel", "proxies", $text, "name_panel", $user['Processing_value']);
@@ -11873,7 +12815,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
             ]
         ]
     ];
-    if (!in_array($panel['type'], ['Manualsale', "WGDashboard", 'hiddify'])) {
+    if (!in_array($panel['type'], ['Manualsale', "WGDashboard", 'hiddify', 'guard'])) {
         $Bot_Status['inline_keyboard'][] = [
             ['text' => $statusconfig, 'callback_data' => "editpanel-stautsconfig-{$panel['config']}-{$panel['code_panel']}"],
             ['text' => "⚙️ ارسال کانفیگ", 'callback_data' => "none"],
@@ -11895,7 +12837,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
             ['text' => "📊 اولین اتصال اکانت تست", 'callback_data' => "none"],
         ];
     }
-    if (!in_array($panel['type'], ["Manualsale", "WGDashboard"])) {
+    if (!in_array($panel['type'], ["Manualsale", "WGDashboard", "guard"])) {
         $Bot_Status['inline_keyboard'][] = [
             ['text' => $changeloc, 'callback_data' => "editpanel-changeloc-{$panel['changeloc']}-{$panel['code_panel']}"],
             ['text' => "🌍 تغییر لوکیشن", 'callback_data' => "none"],
@@ -12575,7 +13517,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
 } elseif ($user['step'] == "getlistidcart") {
     $list = explode("\n", $text);
     foreach ($list as $id_user) {
-        if (!in_array($id_user, $users_ids)) {
+        if (!userExists($id_user)) {
             sendmessage($from_id, "📌 کاربر با آیدی عددی $id_user در  دیتابیس وجود ندارد", $backadmin, 'HTML');
             continue;
         }
@@ -13060,7 +14002,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, "📌 آیدی عددی کاربر را ارسال کنید", $backadmin, 'HTML');
     step("getidExceptio", $from_id);
 } elseif ($user['step'] == "getidExceptio") {
-    if (!in_array($text, $users_ids)) {
+    if (!userExists($text)) {
         sendmessage($from_id, "❌ کاربر وجود ندارد.", $backadmin, 'HTML');
         return;
     }
@@ -13079,7 +14021,7 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     sendmessage($from_id, "📌 آیدی عددی کاربر را جهت حذف از لیست ارسال کنید", $backadmin, 'HTML');
     step("getidExceptioremove", $from_id);
 } elseif ($user['step'] == "getidExceptioremove") {
-    if (!in_array($text, $users_ids)) {
+    if (!userExists($text)) {
         sendmessage($from_id, "❌ کاربر وجود ندارد.", $backadmin, 'HTML');
         return;
     }
@@ -13126,6 +14068,3 @@ if ($datain == "settimecornday" && $adminrulecheck['rule'] == "administrator") {
     update("PaySetting", "ValuePay", $text, "NamePay", "marchent_floypay");
     step('home', $from_id);
 }
-
-
-

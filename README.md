@@ -184,4 +184,3 @@ rm -r /var/www/html/mirzabotconfig/installer
   
 </details>
 
-

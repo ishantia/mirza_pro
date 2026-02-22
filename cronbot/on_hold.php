@@ -1,46 +1,83 @@
 <?php
-ini_set('error_log', 'error_log');
+
+declare(strict_types=1);
+
 date_default_timezone_set('Asia/Tehran');
+ini_set('error_log', 'error_log');
+
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../botapi.php';
 require_once __DIR__ . '/../panels.php';
 require_once __DIR__ . '/../function.php';
-$ManagePanel = new ManagePanel();
+$setting = select('setting', '*');
 
-$setting = select("setting", "*");
-// buy service 
-$stmt = $pdo->prepare("SELECT * FROM marzban_panel WHERE type = 'marzban'  ORDER BY RAND() LIMIT 25");
+$stmt = $pdo->prepare("SELECT * FROM marzban_panel WHERE type = 'marzban' ORDER BY RAND() LIMIT 25");
 $stmt->execute();
-        while ($panel = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $users = getusers($panel['name_panel'],"on_hold")['users'];
-        foreach($users as $user){
-        $invoice = select("invoice","*","username",$user['username'],"select");
-        if($invoice == false )continue;
-        if($invoice['Status'] == "send_on_hold")continue;
-        $line  = $invoice['username'];
-        $resultss = $invoice;
-        $marzban_list_get = $panel;
-        $get_username_Check = $user;
-        if($get_username_Check['status'] != "Unsuccessful"){
-        if(in_array($get_username_Check['status'],['on_hold'])){
-            $timebuyremin = (time() - $resultss['time_sell'])/86400;
-        if ($timebuyremin >= $setting['on_hold_day']) {
-        $sql = "SELECT * FROM service_other WHERE username = :username  AND type = 'change_location'";
-        $stmt = $pdo->prepare($sql);
-        $stmt->bindParam(':username', $line ,PDO::PARAM_STR);
-        $stmt->execute();
-        $service_other = $stmt->rowCount();
-        if($service_other != 0)continue;
-                $text = "سلام! 🌐
 
-دیدیم که شما هنوز به کانفیگ خود با نام کاربری $line متصل نشده‌اید و بیش از {$setting['on_hold_day']} روز از فعال‌سازی آن گذشته است. اگر در راه‌اندازی یا استفاده از سرویس مشکلی دارید، لطفاً با تیم پشتیبانی ما  از طریق آیدی زیر در ارتباط باشید تا به شما کمک کنیم.
-ما آماده‌ایم تا هر گونه سوال یا مشکلی را برطرف کنیم! 📞
+while ($panel = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    if (!isset($panel['name_panel'])) {
+        continue;
+    }
 
-اکانت پشتیبانی : @{$setting['id_support']}";
-            sendmessage($resultss['id_user'], $text, null, 'HTML');
-            update("invoice","Status","send_on_hold", "username",$line);
-            }
+    $usersResponse = getusers($panel['name_panel'], 'on_hold');
+    if (!is_array($usersResponse)) {
+        error_log('on_hold: Unexpected response when fetching users for panel ' . $panel['name_panel']);
+        continue;
+    }
+
+    if (isset($usersResponse['error'])) {
+        error_log('on_hold: Failed to fetch users for panel ' . $panel['name_panel'] . ' - ' . $usersResponse['error']);
+        continue;
+    }
+
+    if (empty($usersResponse['users']) || !is_array($usersResponse['users'])) {
+        continue;
+    }
+
+    foreach ($usersResponse['users'] as $user) {
+        if (!is_array($user) || empty($user['username'])) {
+            continue;
         }
+
+        $invoice = select('invoice', '*', 'username', $user['username'], 'select');
+        if (!$invoice || !is_array($invoice)) {
+            continue;
         }
-}
+
+        if (($invoice['Status'] ?? null) === 'send_on_hold') {
+            continue;
+        }
+
+        $line = $invoice['username'] ?? null;
+        if ($line === null) {
+            continue;
+        }
+
+        $timeSincePurchase = (time() - (int) ($invoice['time_sell'] ?? 0)) / 86400;
+        if ($timeSincePurchase < (int) ($setting['on_hold_day'] ?? 0)) {
+            continue;
+        }
+
+        $sql = "SELECT * FROM service_other WHERE username = :username AND type = 'change_location'";
+        $checkStmt = $pdo->prepare($sql);
+        $checkStmt->bindParam(':username', $line, PDO::PARAM_STR);
+        $checkStmt->execute();
+        if ($checkStmt->rowCount() !== 0) {
+            continue;
+        }
+
+        if (!in_array($user['status'] ?? '', ['on_hold'], true)) {
+            continue;
+        }
+
+        $supportId = $setting['id_support'] ?? '';
+        $text = "سلام! 🌐\n\n" .
+            "دیدیم که شما هنوز به کانفیگ خود با نام کاربری {$line} متصل نشده‌اید و بیش از {$setting['on_hold_day']} روز از فعال‌سازی آن " .
+            "گذشته است. اگر در راه‌اندازی یا استفاده از سرویس مشکلی دارید، لطفاً با تیم پشتیبانی ما از طریق آیدی زیر در ارتباط باشید تا به شما کمک کنیم.\n" .
+            "ما آماده‌ایم تا هر گونه سوال یا مشکلی را برطرف کنیم! 📞\n\n" .
+            "اکانت پشتیبانی : @{$supportId}";
+
+        sendmessage($invoice['id_user'], $text, null, 'HTML');
+        update('invoice', 'Status', 'send_on_hold', 'username', $line);
+    }
 }

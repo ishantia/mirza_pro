@@ -181,10 +181,21 @@ class ServiceMonitor
     private function active_inbound_expire($invoice, $userData, $panel_info)
     {
         if ($invoice['uuid'] != null || $userData['data_limit_reset'] != "no_reset") return;
-        $inbound = explode("*", $panel_info['inbound_deactive']);
+        if (empty($panel_info['inbound_deactive'])) {
+            error_log('active_inbound_expire: inbound_deactive is not configured for panel ' . ($panel_info['name_panel'] ?? 'unknown'));
+            return;
+        }
+
+        $inbound = explode("*", (string) $panel_info['inbound_deactive'], 2);
+        if (count($inbound) < 2 || $inbound[0] === '' || $inbound[1] === '') {
+            error_log('active_inbound_expire: Invalid inbound_deactive format for panel ' . ($panel_info['name_panel'] ?? 'unknown'));
+            return;
+        }
+
         update("invoice", "uuid", json_encode($userData['uuid']), "id_invoice", $invoice['id_invoice']);
         $proxies = [];
-        $proxies[$inbound[0]] = new stdClass();;
+        $inbounds = [];
+        $proxies[$inbound[0]] = new stdClass();
         $inbounds[$inbound[0]][] = $inbound[1];
         $configs  = array(
             "proxies" => $proxies,

@@ -163,10 +163,6 @@ $admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN", ['cache' =>
 if (!is_array($admin_ids)) {
     $admin_ids = [];
 }
-$users_ids = select('user', 'id', null, null, 'FETCH_COLUMN', ['cache' => false]);
-if (!is_array($users_ids)) {
-    $users_ids = [];
-}
 $helpdata = select("help", "*");
 $datatextbotget = select("textbot", "*", null, null, "fetchAll");
 $id_invoice = select("invoice", "id_invoice", null, null, "FETCH_COLUMN");
@@ -239,40 +235,6 @@ if (!function_exists('createForumTopicIfMissing')) {
         if ($threadId !== null) {
             update("topicid", "idreport", $threadId, "report", $reportKey);
         }
-    }
-}
-
-if (!function_exists('buildExtendCategoryKeyboard')) {
-    function buildExtendCategoryKeyboard(PDO $pdo, $panelName, $agent, $invoiceId, $serviceTimeFilter = null)
-    {
-        $stmt = $pdo->prepare("SELECT id, remark FROM category");
-        $stmt->execute();
-        $keyboardRows = [];
-        while ($category = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $query = "SELECT 1 FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent AND category = :category AND one_buy_status = '0'";
-            if ($serviceTimeFilter !== null) {
-                $query .= " AND Service_time = :service_time";
-            }
-            $checkStmt = $pdo->prepare($query . " LIMIT 1");
-            $checkStmt->bindValue(':location', $panelName, PDO::PARAM_STR);
-            $checkStmt->bindValue(':agent', $agent, PDO::PARAM_STR);
-            $checkStmt->bindValue(':category', $category['remark'], PDO::PARAM_STR);
-            if ($serviceTimeFilter !== null) {
-                $checkStmt->bindValue(':service_time', $serviceTimeFilter, PDO::PARAM_INT);
-            }
-            $checkStmt->execute();
-            if (!$checkStmt->fetchColumn()) {
-                continue;
-            }
-            $serviceTimeValue = $serviceTimeFilter === null ? '0' : (string)$serviceTimeFilter;
-            $keyboardRows[] = [
-                [
-                    'text' => $category['remark'],
-                    'callback_data' => sprintf('extendcategory_%s_%s_%s', $invoiceId, $serviceTimeValue, $category['id'])
-                ]
-            ];
-        }
-        return $keyboardRows;
     }
 }
 
@@ -409,7 +371,7 @@ if (strpos($text, "/start ") !== false && $user['step'] != "gettextSystemMessage
             sendmessage($from_id, $textbotlang['users']['affiliates']['offaffiliates'], $keyboard, 'HTML');
             return;
         }
-        if (is_numeric($affiliatesid) && in_array($affiliatesid, $users_ids)) {
+        if (is_numeric($affiliatesid) && userExists($affiliatesid)) {
             if ($affiliatesid == $from_id) {
                 sendmessage($from_id, $textbotlang['users']['affiliates']['invalidaffiliates'], null, 'html');
                 return;
@@ -533,7 +495,7 @@ if ($user['joinchannel'] != "active") {
             $partsaffiliates = explode("_", $user['Processing_value_four']);
             if ($partsaffiliates[0] == "affiliates") {
                 $affiliatesid = $partsaffiliates[1];
-                if (!in_array($affiliatesid, $users_ids)) {
+                if (!userExists($affiliatesid)) {
                     sendmessage($from_id, $textbotlang['users']['affiliates']['affiliatesidyou'], null, 'html');
                     return;
                 }
@@ -1028,55 +990,18 @@ if ($text == "/start" || $datain == "start" || $text == "start") {
         update("user", "Processing_value_four", $marzban['name_panel'], "id", $from_id);
     }
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
- if (isset($DataUserOut['msg']) && $DataUserOut['msg'] == "User not found") {
-    update("invoice", "Status", "disabledn", "id_invoice", $nameloc['id_invoice']);
-    $keyboard_remove = [
-        'inline_keyboard' => [
-            [
-                ['text' => $textbotlang['users']['stateus']['deleteFromListBtn'], 'callback_data' => 'deletelist-' . $nameloc['id_invoice']]
-            ],
-            [
-                ['text' => $textbotlang['users']['stateus']['backlist'], 'callback_data' => 'backorder']
-            ]
-        ]
-    ];
-    $keyboard_remove = json_encode($keyboard_remove);
-    $msg = $textbotlang['users']['stateus']['UserNotFound'] . "\n\n" . $textbotlang['users']['stateus']['deleteSuggestion'];
-    sendmessage($from_id, $msg, $keyboard_remove, 'html');
-    step('home', $from_id);
-    return;
-}
-if ($DataUserOut['status'] == "Unsuccessful") {
-    $keyboard_remove = [
-        'inline_keyboard' => [
-            [
-                ['text' => $textbotlang['users']['stateus']['deleteFromListBtn'], 'callback_data' => 'deletelist-' . $nameloc['id_invoice']]
-            ],
-            [
-                ['text' => $textbotlang['users']['stateus']['backlist'], 'callback_data' => 'backorder']
-            ]
-        ]
-    ];
-    $keyboard_remove = json_encode($keyboard_remove);
-    $msg = $textbotlang['users']['stateus']['panelNotConnected'] . "\n\n" . $textbotlang['users']['stateus']['deleteSuggestion'];
-    sendmessage($from_id, $msg, $keyboard_remove, 'html');
-    step('home', $from_id);
-    return;
-}
-
-    if ($DataUserOut['online_at'] == "online") {
-        $lastonline = 'آنلاین';
-    } elseif ($DataUserOut['online_at'] == "offline") {
-        $lastonline = 'آفلاین';
-    } else {
-        if (isset($DataUserOut['online_at']) && $DataUserOut['online_at'] !== null) {
-            $dateTime = new DateTime($DataUserOut['online_at'], new DateTimeZone('UTC'));
-            $dateTime->setTimezone(new DateTimeZone('Asia/Tehran'));
-            $lastonline = jdate('Y/m/d H:i:s', $dateTime->getTimestamp());
-        } else {
-            $lastonline = "متصل نشده";
-        }
+    if (isset($DataUserOut['msg']) && $DataUserOut['msg'] == "User not found") {
+        update("invoice", "Status", "disabledn", "id_invoice", $nameloc['id_invoice']);
+        sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], $keyboard, 'html');
+        step('home', $from_id);
+        return;
     }
+    if ($DataUserOut['status'] == "Unsuccessful") {
+        sendmessage($from_id, $textbotlang['users']['stateus']['panelNotConnected'], $keyboard, 'html');
+        step('home', $from_id);
+        return;
+    }
+    $lastonline = formatOnlineAtLabel($DataUserOut['online_at'] ?? null, $DataUserOut['is_online'] ?? null);
     #-------------status----------------#
     $status = $DataUserOut['status'];
     $status_var = [
@@ -1486,23 +1411,7 @@ $textconnect
             'parse_mode' => "HTML"
         ]);
     }
-        sendmessage($from_id, "📌 سرویس با موفقیت حذف شد", null, 'html');
-} elseif (preg_match('/deletelist-(\w+)/', $datain, $dataget)) {
-    $id_invoice = $dataget[1];
-    $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
-    if (is_array($nameloc) && $nameloc['id_user'] == $from_id) {
-        if (function_exists('deleteInvoiceFromList')) {
-            deleteInvoiceFromList($id_invoice, $from_id);
-        } else {
-            $stmtDelete = $pdo->prepare("DELETE FROM invoice WHERE id_invoice = :invoice_id AND id_user = :user_id");
-            $stmtDelete->bindParam(':invoice_id', $id_invoice);
-            $stmtDelete->bindParam(':user_id', $from_id);
-            $stmtDelete->execute();
-        }
-        sendmessage($from_id, "📌 سرویس از لیست شما حذف شد", null, 'html');
-    } else {
-        sendmessage($from_id, "❌ امکان حذف سرویس وجود ندارد.", null, 'html');
-    }
+    sendmessage($from_id, "📌 سرویس با موفقیت حذف شد", null, 'html');
 } elseif (preg_match('/config_(\w+)/', $datain, $dataget) || (is_string($text) && strpos($text, "/link ") !== false)) {
     $textCommand = is_string($text) ? $text : '';
     if ($textCommand !== '' && $textCommand[0] === "/") {
@@ -1684,12 +1593,10 @@ $textconnect
     $mainvolume = $mainvolume[$user['agent']];
     $maxvolume = json_decode($marzban_list_get['maxvolume'], true);
     $maxvolume = $maxvolume[$user['agent']];
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND agent = :agent AND one_buy_status = '0'");
-$stmt->execute([
-    ':service_location' => $marzban_list_get['name_panel'],
-    ':agent' => $user['agent'],
-]);
-
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all')");
+    $stmt->execute([
+        ':service_location' => $marzban_list_get['name_panel'],
+    ]);
     $product = $stmt->rowCount();
     savedata("clear", "id_invoice", $nameloc['id_invoice']);
     if ($product == 0) {
@@ -1711,26 +1618,10 @@ $stmt->execute([
         return;
     }
     if ($setting['statuscategory'] == "offcategory") {
-        if ($setting['statuscategorygenral'] == "oncategorys") {
-            $categoryRows = buildExtendCategoryKeyboard($pdo, $nameloc['Service_location'], $user['agent'], $nameloc['id_invoice']);
-            if (!empty($categoryRows)) {
-                $categoryRows[] = [
-                    ['text' => "♻️ تمدید پلن فعلی", 'callback_data' => "exntedagei"]
-                ];
-                $categoryRows[] = [
-                    ['text' => "🏠 بازگشت به اطلاعات سرویس", 'callback_data' => "product_" . $nameloc['id_invoice']]
-                ];
-                Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", json_encode([
-                    'inline_keyboard' => $categoryRows
-                ]));
-                return;
-            }
-        }
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :servicelocation OR Location = 'all') AND (agent = :agent OR agent = 'all')");
-$stmt->execute([
-    ':servicelocation' => $nameloc['Service_location'],
-    ':agent' => $user['agent']
-]);
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all')");
+        $stmt->execute([
+            ':service_location' => $nameloc['Service_location'],
+        ]);
         $productextend = ['inline_keyboard' => []];
         $statusshowprice = select("shopSetting", "*", "Namevalue", "statusshowprice", "select")['value'];
         while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -1798,29 +1689,11 @@ $stmt->execute([
     $monthenumber = $dataget[1];
     $userdate = json_decode($user['Processing_value'], true);
     $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
-$categoryRows = [];
-    if ($setting['statuscategorygenral'] == "oncategorys") {
-        $categoryRows = buildExtendCategoryKeyboard($pdo, $nameloc['Service_location'], $user['agent'], $nameloc['id_invoice'], $monthenumber);
-        if (!empty($categoryRows)) {
-            $categoryRows[] = [
-                ['text' => "♻️ تمدید پلن فعلی", 'callback_data' => "exntedagei"]
-            ];
-            $categoryRows[] = [
-                ['text' => "🏠 بازگشت به اطلاعات سرویس", 'callback_data' => "product_" . $nameloc['id_invoice']]
-            ];
-            Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", json_encode([
-                'inline_keyboard' => $categoryRows
-            ]));
-            return;
-        }
-    }
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND agent = :agent AND Service_time = :monthe AND one_buy_status = '0'");
-$stmt->execute([
-    ':service_location' => $nameloc['Service_location'],
-    ':agent' => $user['agent'],
-    'monthe' => $monthenumber
-]);
-
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND Service_time = :monthe");
+    $stmt->execute([
+        ':service_location' => $nameloc['Service_location'],
+        'monthe' => $monthenumber
+    ]);
     $productextend = ['inline_keyboard' => []];
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     $statusshowprice = select("shopSetting", "*", "Namevalue", "statusshowprice", "select")['value'];
@@ -1850,82 +1723,6 @@ $stmt->execute([
 
     $json_list_product_lists = json_encode($productextend);
     Editmessagetext($from_id, $message_id, $textbotlang['users']['extend']['selectservice'], $json_list_product_lists);
-} elseif (preg_match('/^extendcategory_(\w+)_(\w+)_(\w+)/', $datain, $dataget)) {
-    $extendInvoiceId = $dataget[1];
-    $extendMonth = $dataget[2] !== '0' ? intval($dataget[2]) : null;
-    $categoryId = $dataget[3];
-    $nameloc = select("invoice", "*", "id_invoice", $extendInvoiceId, "select");
-    if ($nameloc == false || $nameloc['id_user'] != $from_id) {
-        if (isset($callback_query_id)) {
-            telegram('answerCallbackQuery', [
-                'callback_query_id' => $callback_query_id,
-                'text' => "دسته بندی نامعتبر است.",
-                'show_alert' => true
-            ]);
-        }
-        return;
-    }
-    $category = select("category", "*", "id", $categoryId, "select");
-    if ($category == false) {
-        if (isset($callback_query_id)) {
-            telegram('answerCallbackQuery', [
-                'callback_query_id' => $callback_query_id,
-                'text' => "این دسته بندی وجود ندارد.",
-                'show_alert' => true
-            ]);
-        }
-        return;
-    }
-    $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent AND category = :category AND one_buy_status = '0'";
-    if ($extendMonth !== null) {
-        $query .= " AND Service_time = :service_time";
-    }
-    $stmt = $pdo->prepare($query);
-    $stmt->bindValue(':location', $nameloc['Service_location'], PDO::PARAM_STR);
-    $stmt->bindValue(':agent', $user['agent'], PDO::PARAM_STR);
-    $stmt->bindValue(':category', $category['remark'], PDO::PARAM_STR);
-    if ($extendMonth !== null) {
-        $stmt->bindValue(':service_time', $extendMonth, PDO::PARAM_INT);
-    }
-    $stmt->execute();
-    $productextend = ['inline_keyboard' => []];
-    $statusshowprice = select("shopSetting", "*", "Namevalue", "statusshowprice", "select")['value'];
-    while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $hide_panel = json_decode($result['hide_panel'], true);
-        if (is_array($hide_panel) && in_array($nameloc['Service_location'], $hide_panel)) {
-            error_log("Extend category: product {$result['code_product']} hidden for {$nameloc['Service_location']} but still listed.");
-        }
-        if (intval($user['pricediscount']) != 0) {
-            $resultper = ($result['price_product'] * $user['pricediscount']) / 100;
-            $result['price_product'] = $result['price_product'] - $resultper;
-        }
-        if ($statusshowprice == "offshowprice") {
-            $namekeyboard = $result['name_product'];
-        } else {
-            $result['price_product'] = number_format($result['price_product']);
-            $namekeyboard = $result['name_product'] . " - " . $result['price_product'] . "تومان";
-        }
-        $productextend['inline_keyboard'][] = [
-            ['text' => $namekeyboard, 'callback_data' => "serviceextendselect_" . $result['code_product']]
-        ];
-    }
-    if (empty($productextend['inline_keyboard'])) {
-        if (isset($callback_query_id)) {
-            telegram('answerCallbackQuery', [
-                'callback_query_id' => $callback_query_id,
-                'text' => "محصولی برای این دسته بندی یافت نشد.",
-                'show_alert' => true
-            ]);
-        }
-        return;
-    }
-    $productextend['inline_keyboard'][] = [
-        ['text' => "♻️ تمدید پلن فعلی", 'callback_data' => "exntedagei"]
-    ];
-    $productextend['inline_keyboard'][] = [
-        ['text' => "🏠 بازگشت به اطلاعات سرویس", 'callback_data' => "product_" . $nameloc['id_invoice']]
-    ];
-    Editmessagetext($from_id, $message_id, $textbotlang['users']['extend']['selectservice'], json_encode($productextend));
 } elseif (preg_match('/^serviceextendselect_(.*)/', $datain, $dataget) || $user['step'] == "getvolumecustomuserforextend" || $datain == "exntedagei") {
     $userdate = json_decode($user['Processing_value'], true);
     $nameloc = select("invoice", "*", "id_invoice", $userdate['id_invoice'], "select");
@@ -1982,13 +1779,11 @@ $stmt->execute([
         $product['Volume_constraint'] = $userdate['volume'];
         step("home", $from_id);
     } else {
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND agent = :agent AND code_product = :code_product");
-$stmt->execute([
-    ':service_location' => $nameloc['Service_location'],
-    ':agent' => $user['agent'],
-    ':code_product' => $codeproduct,
-]);
-
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND code_product = :code_product");
+        $stmt->execute([
+            ':service_location' => $nameloc['Service_location'],
+            ':code_product' => $codeproduct,
+        ]);
         $product = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     if ($product == false) {
@@ -2685,13 +2480,11 @@ $stmt->execute([
         $prodcut['code_product'] = "🛍 حجم دلخواه";
         $product['inbounds'] = null;
     } else {
-    $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND agent = :agent AND name_product = :name_product");
-    $stmt->execute([
-        ':service_location' => $nameloc['Service_location'],
-        ':agent' => $user['agent'],
-        'name_product' => $nameloc['name_product']
-    ]);
-
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :service_location OR Location = '/all') AND name_product = :name_product");
+        $stmt->execute([
+            ':service_location' => $nameloc['Service_location'],
+            'name_product' => $nameloc['name_product']
+        ]);
         $prodcut = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     if ($product['inbounds'] != null) {
@@ -2935,18 +2728,7 @@ $stmt->execute([
 - موقعیت سرویس : {$nameloc['Service_location']}
 - توضیحات اختلال : {$user['Processing_value']}";
     $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
-    if ($DataUserOut['online_at'] == "online") {
-        $lastonline = 'آنلاین';
-    } elseif ($DataUserOut['online_at'] == "offline") {
-        $lastonline = 'آفلاین';
-    } else {
-        if (isset($DataUserOut['online_at']) && $DataUserOut['online_at'] !== null) {
-            $dateString = $DataUserOut['online_at'];
-            $lastonline = jdate('Y/m/d H:i:s', strtotime($dateString));
-        } else {
-            $lastonline = "متصل نشده";
-        }
-    }
+    $lastonline = formatOnlineAtLabel($DataUserOut['online_at'] ?? null, $DataUserOut['is_online'] ?? null);
     #-------------status----------------#
     $status = $DataUserOut['status'];
     $status_var = [
@@ -3290,18 +3072,7 @@ $stmt->execute([
         return;
     }
     #-------------status----------------#
-    if ($DataUserOut['online_at'] == "online") {
-        $lastonline = 'آنلاین';
-    } elseif ($DataUserOut['online_at'] == "offline") {
-        $lastonline = 'آفلاین';
-    } else {
-        if (isset($DataUserOut['online_at']) && $DataUserOut['online_at'] !== null) {
-            $dateString = $DataUserOut['online_at'];
-            $lastonline = jdate('Y/m/d H:i:s', strtotime($dateString));
-        } else {
-            $lastonline = "متصل نشده";
-        }
-    }
+    $lastonline = formatOnlineAtLabel($DataUserOut['online_at'] ?? null, $DataUserOut['is_online'] ?? null);
     $status = $DataUserOut['status'];
     $status_var = [
         'active' => $textbotlang['users']['stateus']['active'],
@@ -3390,7 +3161,7 @@ $stmt->execute([
     update("user", "Processing_value_one", $nameloc['username'], "id", $from_id);
     update("user", "Processing_value_tow", $nameloc['id_invoice'], "id", $from_id);
 } elseif ($user['step'] == "getidfortransfer") {
-    if (!in_array($text, $users_ids)) {
+    if (!userExists($text)) {
         sendmessage($from_id, $textbotlang['Admin']['transfor']['notusertrns'], $backuser, 'HTML');
         return;
     }
@@ -4053,7 +3824,13 @@ $textinvite
             $mainvolume = $mainvolume[$user['agent']];
             $maxvolume = json_decode($marzban_list_get['maxvolume'], true);
             $maxvolume = $maxvolume[$user['agent']];
-            $nullproduct = select("product", "*", null, null, "count");
+            $productCountParams = [
+                ':location' => $location,
+                ':agent' => $user['agent']
+            ];
+            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+            $productCountStmt->execute($productCountParams);
+            $nullproduct = (int)$productCountStmt->fetchColumn();
             if ($nullproduct == 0) {
                 $textcustom = "📌 حجم درخواستی خود را ارسال کنید.
 🔔قیمت هر گیگ حجم $custompricevalue تومان می باشد.
@@ -4075,7 +3852,11 @@ $textinvite
                     sendmessage($from_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($location, $user['agent'], $backuser), 'HTML');
                 }
             } else {
-                $query = "SELECT * FROM product WHERE (Location = '$location' OR Location = '/all') AND agent= '{$user['agent']}'";
+                $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent";
+                $queryParams = [
+                    ':location' => $location,
+                    ':agent' => $user['agent']
+                ];
                 $marzban_list_get = select("marzban_panel", "*", "name_panel", $location, "select");
                 $statuscustomvolume = json_decode($marzban_list_get['customvolume'], true)[$user['agent']];
                 if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم") {
@@ -4090,13 +3871,19 @@ $textinvite
                 }
                 $textproduct = $textbotlang['users']['sell']['Service-select-first'];
                 if ($datain == "buy") {
-                    Editmessagetext($from_id, $message_id, $textproduct, KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom));
+                    Editmessagetext($from_id, $message_id, $textproduct, KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolume", $user['agent'], $queryParams));
                 } else {
-                    sendmessage($from_id, $textproduct, KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom), 'HTML');
+                    sendmessage($from_id, $textproduct, KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolume", $user['agent'], $queryParams), 'HTML');
                 }
             }
         } else {
-            $nullproduct = select("product", "*", null, null, "count");
+            $productCountParams = [
+                ':location' => $location,
+                ':agent' => $user['agent']
+            ];
+            $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+            $productCountStmt->execute($productCountParams);
+            $nullproduct = (int)$productCountStmt->fetchColumn();
             if ($nullproduct == 0) {
                 sendmessage($from_id, $textbotlang['Admin']['Product']['nullpProduct'], null, 'HTML');
                 return;
@@ -4153,7 +3940,13 @@ $textinvite
     } else {
         savedata('clear', "name_panel", $location);
     }
-    $nullproduct = select("product", "*", null, null, "count");
+    $productCountParams = [
+        ':location' => $location,
+        ':agent' => $user['agent']
+    ];
+    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+    $productCountStmt->execute($productCountParams);
+    $nullproduct = (int)$productCountStmt->fetchColumn();
     if ($nullproduct == 0) {
         $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
         $custompricevalue = $eextraprice[$user['agent']];
@@ -4173,7 +3966,11 @@ $textinvite
             $marzban_list_get = select("marzban_panel", "*", "name_panel", $location, "select");
             Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($location, $user['agent'], "buybacktow"));
         } else {
-            $query = "SELECT * FROM product WHERE (Location = '$location' OR Location = '/all') AND agent= '{$user['agent']}'";
+            $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent";
+            $queryParams = [
+                ':location' => $location,
+                ':agent' => $user['agent']
+            ];
             $statuscustomvolume = json_decode($marzban_list_get['customvolume'], true)[$user['agent']];
             if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم") {
                 $datakeyboard = "prodcutservices_";
@@ -4190,10 +3987,12 @@ $textinvite
             } else {
                 $back = "buyback";
             }
-            Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, $back));
+            Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, $back, null, "customsellvolume", $user['agent'], $queryParams));
         }
     } else {
-        $nullproduct = select("product", "*", null, null, "count");
+        $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+        $productCountStmt->execute($productCountParams);
+        $nullproduct = (int)$productCountStmt->fetchColumn();
         if ($nullproduct == 0) {
             sendmessage($from_id, $textbotlang['Admin']['Product']['nullpProduct'], null, 'HTML');
             return;
@@ -4208,14 +4007,23 @@ $textinvite
 } elseif (preg_match('/^categorynames_(.*)/', $datain, $dataget)) {
     $categorynames = $dataget[1];
     $categorynames = select("category", "remark", "id", $categorynames, "select")['remark'];
-  $userdate = json_decode($user['Processing_value'], true);
-if (isset($userdate['monthproduct'])) {
-   $query = "SELECT * FROM product WHERE (Location = '{$userdate['name_panel']}' OR Location = '/all') AND agent = '{$user['agent']}' AND category = '$categorynames' AND Service_time = '{$userdate['monthproduct']}'";
-} else {
-    $query = "SELECT * FROM product WHERE (Location = '{$userdate['name_panel']}' OR Location = '/all') AND agent= '{$user['agent']}' AND category = '$categorynames'";
-}
-
-
+    $userdate = json_decode($user['Processing_value'], true);
+    if (isset($userdate['monthproduct'])) {
+        $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND category = :category AND Service_time = :service_time AND agent = :agent";
+        $queryParams = [
+            ':location' => $userdate['name_panel'],
+            ':category' => $categorynames,
+            ':service_time' => $userdate['monthproduct'],
+            ':agent' => $user['agent']
+        ];
+    } else {
+        $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND category = :category AND agent = :agent";
+        $queryParams = [
+            ':location' => $userdate['name_panel'],
+            ':category' => $categorynames,
+            ':agent' => $user['agent']
+        ];
+    }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $userdate['name_panel'], "select");
     $statuscustomvolume = json_decode($marzban_list_get['customvolume'], true)[$user['agent']];
     if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم") {
@@ -4228,7 +4036,7 @@ if (isset($userdate['monthproduct'])) {
     } else {
         $statuscustom = false;
     }
-    Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select-first'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom));
+    Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select-first'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolume", $user['agent'], $queryParams));
 } elseif (preg_match('/^productmonth_(\w+)/', $datain, $dataget)) {
     $monthenumber = $dataget[1];
     $userdate = json_decode($user['Processing_value'], true);
@@ -4246,7 +4054,12 @@ if (isset($userdate['monthproduct'])) {
         }
         Editmessagetext($from_id, $message_id, "📌 دسته بندی خود را انتخاب نمایید!", KeyboardCategory($marzban_list_get['name_panel'], $user['agent'], $back));
     } else {
-$query = "SELECT * FROM product WHERE (Location = '{$userdate['name_panel']}' OR Location = '/all') AND agent = '{$user['agent']}' AND Service_time = '$monthenumber'";
+        $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND Service_time = :service_time AND agent = :agent";
+        $queryParams = [
+            ':location' => $userdate['name_panel'],
+            ':service_time' => $monthenumber,
+            ':agent' => $user['agent']
+        ];
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $userdate['name_panel'], "select");
         $statuscustomvolume = json_decode($marzban_list_get['customvolume'], true)[$user['agent']];
         if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم") {
@@ -4259,7 +4072,7 @@ $query = "SELECT * FROM product WHERE (Location = '{$userdate['name_panel']}' OR
         } else {
             $statuscustom = false;
         }
-        Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select-first'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom));
+        Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select-first'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolume", $user['agent'], $queryParams));
     }
 } elseif ($datain == "customsellvolume") {
     $userdate = json_decode($user['Processing_value'], true);
@@ -4387,7 +4200,13 @@ $query = "SELECT * FROM product WHERE (Location = '{$userdate['name_panel']}' OR
         $info_product['Service_time'] = $parts[1];
         $info_product['price_product'] = ($parts[2] * $custompricevalue) + ($parts[1] * $customtimevalueprice);
     } else {
-        $info_product = mysqli_fetch_assoc(mysqli_query($connect, "SELECT * FROM product WHERE code_product = '$loc' AND (Location = '{$userdate['name_panel']}'or Location = '/all') LIMIT 1"));
+        $stmt = $pdo->prepare("SELECT * FROM product WHERE code_product = :code_product AND (Location = :location OR Location = '/all') AND agent = :agent LIMIT 1");
+        $stmt->execute([
+            ':code_product' => $loc,
+            ':location' => $userdate['name_panel'],
+            ':agent' => $user['agent']
+        ]);
+        $info_product = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     if (!isset($info_product['price_product'])) {
         sendmessage($from_id, "❌ خطایی در تایید  انجام شده است لطفا مراحل پرداخت را مجددا انجام دهید", $keyboard, 'HTML');
@@ -4919,7 +4738,13 @@ $textonebuy
 } elseif (preg_match('/^locationom_(.*)/', $datain, $dataget)) {
     $location = select("marzban_panel", "*", "code_panel", $dataget[1], "select")['name_panel'];
     $marzban_list_get = select("marzban_panel", "*", "code_panel", $dataget[1], "select");
-    $nullproduct = select("product", "*", null, null, "count");
+    $productCountParams = [
+        ':location' => $location,
+        ':agent' => $user['agent']
+    ];
+    $productCountStmt = $pdo->prepare("SELECT COUNT(*) FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent");
+    $productCountStmt->execute($productCountParams);
+    $nullproduct = (int)$productCountStmt->fetchColumn();
     if ($nullproduct == 0) {
         sendmessage($from_id, $textbotlang['Admin']['Product']['nullpProduct'], null, 'HTML');
         return;
@@ -4936,8 +4761,8 @@ $textonebuy
     } else {
         $statuscustom = false;
     }
-    $query = "SELECT * FROM product WHERE (Location = '$location' OR Location = '/all') AND agent= '{$user['agent']}'";
-    Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolumeom"));
+    $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent";
+    Editmessagetext($from_id, $message_id, $textbotlang['users']['sell']['Service-select'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], $datakeyboard, $statuscustom, "backuser", null, "customsellvolumeom", $user['agent'], $productCountParams));
 } elseif ($datain == "customsellvolumeom") {
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
     $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
@@ -5916,7 +5741,7 @@ $textonebuy
         $paymentkeyboard = json_encode([
             'inline_keyboard' => [
                 [
-                    ['text' => "پرداخت", 'url' => $pay['payment_url_web']]
+                    ['text' => "پرداخت", 'url' => $pay['payment_url_bot']]
                 ]
             ]
         ]);
@@ -7006,14 +6831,14 @@ $text_porsant
         sendmessage($from_id, "📛 این بخش درحال حاضر غیرفعال می باشد", $keyboard, 'HTML');
         return;
     }
-    if (!in_array($user['affiliates'], $users_ids)) {
+    if (!userExists($user['affiliates'])) {
         sendmessage($from_id, "📛 شما زیرمجموعه هیچ کاربری نیستید.", $keyboard, 'HTML');
         return;
     }
     $reagent = select("reagent_report", "*", "user_id", $from_id, "select", ['cache' => false]);
     if (!$reagent) {
         $affiliateId = intval($user['affiliates']);
-        if ($affiliateId && in_array($affiliateId, $users_ids)) {
+        if ($affiliateId && userExists($affiliateId)) {
             $stmt = $pdo->prepare("INSERT INTO reagent_report (user_id, get_gift, time, reagent)
                                    VALUES (:user_id, :get_gift, :time, :reagent)
                                    ON DUPLICATE KEY UPDATE reagent = VALUES(reagent), get_gift = VALUES(get_gift), time = VALUES(time)");
@@ -7743,7 +7568,11 @@ if (isset($update['pre_checkout_query'])) {
     }
     $location = $location['name_panel'];
     update("user", "Processing_value", $location, "id", $from_id);
-    $query = "SELECT * FROM product WHERE (Location = '$location' OR Location = '/all') AND agent= '{$user['agent']}'";
+    $query = "SELECT * FROM product WHERE (Location = :location OR Location = '/all') AND agent = :agent";
+    $queryParams = [
+        ':location' => $location,
+        ':agent' => $user['agent']
+    ];
     $marzban_list_get = select("marzban_panel", "*", "code_panel", $location, "select");
     $statuscustomvolume = json_decode($marzban_list_get['customvolume'], true)[$user['agent']];
     if ($marzban_list_get['MethodUsername'] == $textbotlang['users']['customusername'] || $marzban_list_get['MethodUsername'] == "نام کاربری دلخواه + عدد رندوم") {
@@ -7756,18 +7585,17 @@ if (isset($update['pre_checkout_query'])) {
     } else {
         $statuscustom = false;
     }
-    Editmessagetext($from_id, $message_id, $textbotlang['users']['extend']['selectservice'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], "serviceextendselects-", false, "backuser", $username));
+    Editmessagetext($from_id, $message_id, $textbotlang['users']['extend']['selectservice'], KeyboardProduct($marzban_list_get['name_panel'], $query, $user['pricediscount'], "serviceextendselects-", false, "backuser", $username, "customsellvolume", $user['agent'], $queryParams));
 } elseif (preg_match('/^serviceextendselects-(.*)-(.*)/', $datain, $dataget)) {
     deletemessage($from_id, $message_id);
     $codeproduct = $dataget[1];
     $username = $dataget[2];
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :processing_value OR Location = '/all') AND agent = :agent AND code_product = :code_product");
-$stmt->execute([
-    ':processing_value' => $user['Processing_value'],
-    ':agent' => $user['agent'],
-    ':code_product' => $codeproduct,
-]);
-
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :processing_value OR Location = '/all') AND code_product = :code_product AND agent = :agent");
+    $stmt->execute([
+        ':processing_value' => $user['Processing_value'],
+        ':code_product' => $codeproduct,
+        ':agent' => $user['agent']
+    ]);
     $prodcut = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($prodcut == false) {
         sendmessage($from_id, $textbotlang['users']['erroroccurred'], $keyboard, 'html');
@@ -7785,13 +7613,12 @@ $stmt->execute([
     $codeproduct = $dataget[1];
     $usernamePanelExtends = $dataget[2];
     deletemessage($from_id, $message_id);
-$stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :processing_value OR Location = '/all') AND agent = :agent AND code_product = :code_product");
-$stmt->execute([
-    ':processing_value' => $user['Processing_value'],
-    ':agent' => $user['agent'],
-    ':code_product' => $codeproduct,
-]);
-
+    $stmt = $pdo->prepare("SELECT * FROM product WHERE (Location = :processing_value OR Location = '/all') AND code_product = :code_product AND agent = :agent");
+    $stmt->execute([
+        ':processing_value' => $user['Processing_value'],
+        ':code_product' => $codeproduct,
+        ':agent' => $user['agent']
+    ]);
     $prodcut = $stmt->fetch(PDO::FETCH_ASSOC);
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $usernamePanelExtends);

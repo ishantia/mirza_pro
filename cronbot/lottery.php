@@ -8,76 +8,80 @@ require_once __DIR__ . '/../function.php';
 require __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../jdf.php';
 
-$setting = select("setting", "*");
+$setting = select('setting', '*');
+$midnight_time = date('H:i');
 
-if (!$setting || !isset($setting['scorestatus'])) {
-    error_log("Setting data is missing or incomplete.");
-    exit;
-}
+if (intval($setting['scorestatus']) === 1) {
+    $otherreport = select('topicid', 'idreport', 'report', 'otherreport', 'select')['idreport'];
 
-if (intval($setting['scorestatus']) == 1) {
-    $otherreport = select("topicid", "idreport", "report", "otherreport", "select")['idreport'];
+    if ($midnight_time === '00:00') {
+        $lotteryPrizeConfig = json_decode($setting['Lottery_prize'], true);
 
-    $temp = [];
-    $Lottery_prize = json_decode($setting['Lottery_prize'], true);
-    if (!is_array($Lottery_prize)) {
-        error_log("Lottery_prize is not a valid JSON array.");
-        exit;
-    }
-    foreach ($Lottery_prize as $lottery) {
-        $temp[] = $lottery;
-    }
-    $Lottery_prize = $temp;
-
-    if ($setting['Lotteryagent'] == "1") {
-        $stmt = $pdo->prepare("SELECT * FROM user WHERE User_Status = 'Active' AND score != '0' ORDER BY score DESC LIMIT 3");
-    } else {
-        $stmt = $pdo->prepare("SELECT * FROM user WHERE User_Status = 'Active' AND score != '0' AND agent = 'f' ORDER BY score DESC LIMIT 3");
-    }
-    $stmt->execute();
-
-    $count = 0;
-    $textlotterygroup = "📌 ادمین عزیز کاربران زیر برنده قرعه کشی و حسابشان شارژ گردید.\n";
-
-    $textJson = json_decode(file_get_contents('../text.json'), true);
-    if (!is_array($textJson)) {
-        error_log("text.json is not a valid JSON file.");
-        exit;
-    }
-
-    while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $userLang = isset($result['language']) && !empty($result['language']) ? $result['language'] : 'fa';
-        if (!isset($textJson[$userLang])) {
-            $userLang = 'fa';
-        }
-        $textbotlang = $textJson[$userLang];
-
-        if (!isset($Lottery_prize[$count])) {
-            error_log("No prize defined for rank " . ($count + 1));
-            break;
+        if (!is_array($lotteryPrizeConfig)) {
+            error_log('Lottery prize configuration is invalid.');
+            return;
         }
 
-        $prizeAmount = intval($Lottery_prize[$count]);
-        $balance_last = intval($result['Balance']) + $prizeAmount;
-        update("user", "Balance", $balance_last, "id", $result['id']);
+        $Lottery_prize = array_values(array_filter($lotteryPrizeConfig, static function ($value) {
+            return $value !== null && $value !== '';
+        }));
 
-        $balanceFormatted = number_format($prizeAmount);
-        $rank = $count + 1;
+        if (count($Lottery_prize) === 0) {
+            error_log('Lottery prize configuration is empty.');
+            return;
+        }
 
-        $textlottery = "🎁 نتیجه قرعه کشی \n\n😎 کاربر عزیز تبریک! شما نفر $rank برنده $balanceFormatted تومان موجودی شدید و حساب شما شارژ گردید.";
-        sendmessage($result['id'], $textlottery, null, 'html');
+        if ($setting['Lotteryagent'] === '1') {
+            $stmt = $pdo->prepare("SELECT * FROM user WHERE User_Status = 'Active' AND score != '0' ORDER BY score DESC LIMIT 3");
+        } else {
+            $stmt = $pdo->prepare("SELECT * FROM user WHERE User_Status = 'Active' AND score != '0' AND agent = 'f' ORDER BY score DESC LIMIT 3");
+        }
 
-        $textlotterygroup .= "\nنام کاربری : @{$result['username']}\nآیدی عددی : {$result['id']}\nمبلغ : $balanceFormatted\nنفر : $rank\n---------------\n";
+        $stmt->execute();
 
-        $count++;
+        $count = 0;
+        $winners = 0;
+        $textlotterygroup = "📌 ادمین عزیز کاربران زیر برنده قرعه کشی و حسابشان شارژ گردید." . PHP_EOL . PHP_EOL;
+        while ($result = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!array_key_exists($count, $Lottery_prize)) {
+                break;
+            }
+
+            $prizeAmount = (int) $Lottery_prize[$count];
+            if ($prizeAmount <= 0) {
+                $count++;
+                continue;
+            }
+
+            $balance_last = (int) $result['Balance'] + $prizeAmount;
+            update('user', 'Balance', $balance_last, 'id', $result['id']);
+
+            $formattedPrize = number_format($prizeAmount);
+            $countla = $count + 1;
+            $textlottery = "🎁 نتیجه قرعه کشی" . PHP_EOL . PHP_EOL . "😎 کاربر عزیز تبریک شما  نفر $countla برنده $formattedPrize تومان موجودی شدید و حساب شما شارژ گردید.";
+            sendmessage($result['id'], $textlottery, null, 'html');
+
+            $count++;
+            $winners++;
+
+            $textlotterygroup .= PHP_EOL
+                . "نام کاربری : @{$result['username']}" . PHP_EOL
+                . "آیدی عددی : {$result['id']}" . PHP_EOL
+                . "مبلغ : $formattedPrize" . PHP_EOL
+                . "نفر : $countla" . PHP_EOL
+                . "--------------";
+        }
+
+        if ($winners > 0) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'message_thread_id' => $otherreport,
+                'text' => $textlotterygroup,
+                'parse_mode' => 'HTML',
+            ]);
+
+            update('user', 'score', '0', null, null);
+        }
     }
-
-    telegram('sendmessage', [
-        'chat_id'           => $setting['Channel_Report'],
-        'message_thread_id' => $otherreport,
-        'text'              => $textlotterygroup,
-        'parse_mode'        => "HTML",
-    ]);
-
-    update("user", "score", "0", null, null);
 }
+
